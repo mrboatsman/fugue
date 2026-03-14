@@ -1,0 +1,33 @@
+# Fugue Configuration
+
+[server]
+host = "0.0.0.0"
+port = 4533
+# Log level: error, warn, info, debug, trace
+log_level = "info"
+
+# Users that can connect to Fugue via Subsonic clients
+[auth]
+[[auth.users]]
+username = "admin"
+password = "changeme"
+
+# Backend Navidrome servers
+[[backends]]
+name = "local"
+url = "http://localhost:4533"
+username = "admin"
+password = "admin"
+weight = 10  # Higher weight = preferred for dedup
+
+# [[backends]]
+# name = "friend1"
+# url = "http://friend1.example.com:4533"
+# username = "fugue"
+# password = "shared-password"
+# weight = 5
+
+# Cache settings
+[cache]
+db_path = "fugue.db"
+refresh_interval_secs = 300

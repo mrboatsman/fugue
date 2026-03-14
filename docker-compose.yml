@@ -1,0 +1,8 @@
+services:
+  fugue:
+    build: .
+    ports:
+      - "4533:4533"
+    volumes:
+      - ./fugue.toml:/etc/fugue/fugue.toml:ro
+    restart: unless-stopped
