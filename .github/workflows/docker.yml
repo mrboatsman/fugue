@@ -3,7 +3,10 @@ name: Build and publish Docker image
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+  # Trigger when Release workflow completes (after it creates a tag)
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 
 env:
   REGISTRY: ghcr.io
@@ -12,6 +15,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Only run if triggered by push to main, or if Release workflow succeeded
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     permissions:
       contents: read
       packages: write
@@ -19,12 +26,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Extract version from Cargo.toml
         id: cargo_version
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version tag exists
+        id: check_tag
+        run: |
+          VERSION="${{ steps.cargo_version.outputs.version }}"
+          if git tag -l "v${VERSION}" | grep -q "v${VERSION}"; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -42,11 +61,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Push to main -> dev
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
-            # Tag push -> version number + latest
-            type=raw,value=${{ steps.cargo_version.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Always tag dev on main
+            type=raw,value=dev,enable=${{ github.event_name == 'push' }}
+            # Tag version + latest when a release tag exists
+            type=raw,value=${{ steps.cargo_version.outputs.version }},enable=${{ steps.check_tag.outputs.is_release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.check_tag.outputs.is_release == 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
