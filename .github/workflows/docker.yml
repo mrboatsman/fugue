@@ -28,21 +28,28 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Extract version from Cargo.toml
         id: cargo_version
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Cargo version: $VERSION"
 
       - name: Check if version tag exists
         id: check_tag
         run: |
+          git fetch --tags --force
           VERSION="${{ steps.cargo_version.outputs.version }}"
+          echo "Looking for tag v${VERSION}..."
+          git tag -l
           if git tag -l "v${VERSION}" | grep -q "v${VERSION}"; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v${VERSION} found — will tag as release"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag v${VERSION} not found — dev only"
           fi
 
       - name: Set up Docker Buildx
@@ -61,9 +68,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Always tag dev on main
-            type=raw,value=dev,enable=${{ github.event_name == 'push' }}
-            # Tag version + latest when a release tag exists
+            type=raw,value=dev
             type=raw,value=${{ steps.cargo_version.outputs.version }},enable=${{ steps.check_tag.outputs.is_release == 'true' }}
             type=raw,value=latest,enable=${{ steps.check_tag.outputs.is_release == 'true' }}
 
