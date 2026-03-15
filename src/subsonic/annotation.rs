@@ -208,5 +208,20 @@ pub async fn scrobble(
 
     backend.request_json("scrobble", &extra).await?;
 
+    // Broadcast now-playing to friends if social is enabled and this is a "now playing" scrobble
+    let is_submission = params.raw.get("submission").map(|s| s == "true").unwrap_or(true);
+    if !is_submission {
+        // submission=false means "now playing" (not a final scrobble)
+        if let Some(social) = state.social() {
+            // Fetch track info for the broadcast
+            if let Ok(mut song_resp) = backend.request_json("getSong", &[("id", &original_id)]).await {
+                song_resp.namespace_ids(backend.index);
+                if let Some(song) = song_resp.get("song") {
+                    social.broadcast_now_playing(song).await;
+                }
+            }
+        }
+    }
+
     Ok(SubsonicResponse::empty(params.format))
 }

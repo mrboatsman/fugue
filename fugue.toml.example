@@ -31,3 +31,17 @@ weight = 10  # Higher weight = preferred for dedup
 [cache]
 db_path = "fugue.db"
 refresh_interval_secs = 300
+
+# P2P social layer (Iroh-based)
+# Connect with friends to share libraries, playlists, and activity.
+# No ports to open, no credentials to share — just exchange tickets.
+[social]
+enabled = false
+# Your display name visible to friends
+display_name = "Fugue User"
+
+# Manage friends via CLI:
+#   fugue ticket                              # Show your ticket
+#   fugue friend add --name "Pelle" <ticket>  # Add a friend
+#   fugue friend list                         # List friends
+#   fugue friend remove Pelle                 # Remove a friend

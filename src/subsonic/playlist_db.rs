@@ -4,6 +4,15 @@ use tracing::debug;
 
 use crate::error::FugueError;
 
+/// Convert SQLite datetime format to ISO 8601 for Subsonic compatibility.
+/// "2026-03-16 00:15:25" -> "2026-03-16T00:15:25Z"
+fn to_iso8601(ts: &str) -> String {
+    if ts.contains('T') {
+        return ts.to_string(); // already ISO format
+    }
+    ts.replace(' ', "T") + "Z"
+}
+
 /// ID prefix for Fugue-local playlists: base64url("m:{uuid}")
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -73,8 +82,8 @@ pub async fn get_playlists_for_user(
             "owner": owner,
             "songCount": track_count.0,
             "duration": duration.0,
-            "created": created,
-            "changed": created,
+            "created": to_iso8601(&created),
+            "changed": to_iso8601(&created),
         }));
     }
 
@@ -117,8 +126,8 @@ pub async fn get_playlist(
             "owner": owner,
             "songCount": entry.len(),
             "duration": 0,
-            "created": created,
-            "changed": created,
+            "created": to_iso8601(&created),
+            "changed": to_iso8601(&created),
             "entry": entry,
         }
     }))

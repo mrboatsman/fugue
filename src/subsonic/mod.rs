@@ -82,7 +82,13 @@ pub fn router() -> Router<AppState> {
     let r = subsonic_route!(r, "getAlbumInfo2", extras::get_album_info2);
     let r = subsonic_route!(r, "getArtistInfo", extras::get_artist_info);
     let r = subsonic_route!(r, "getArtistInfo2", extras::get_artist_info2);
+    let r = subsonic_route!(r, "getChatMessages", extras::get_chat_messages);
+    let r = subsonic_route!(r, "addChatMessage", extras::add_chat_message);
     // Admin endpoints (no Subsonic auth, not exposed to clients)
     let r = r.route("/admin/sync", post(system::admin_sync));
+    let r = r.route("/admin/ticket", any(system::admin_ticket));
+    let r = r.route("/admin/status", any(system::admin_status));
+    let r = r.route("/admin/refresh-friends", post(system::admin_refresh_friends));
+    let r = r.route("/admin/playlist-sync", any(system::admin_playlist_sync));
     r.layer(middleware::from_fn(params::merge_post_form_params))
 }

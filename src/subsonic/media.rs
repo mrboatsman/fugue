@@ -8,6 +8,7 @@ use crate::error::FugueError;
 use crate::id::is_dedup_id;
 use crate::proxy::router::route_to_backend;
 use crate::proxy::stream::proxy_stream;
+use crate::social::collab_playlist;
 use crate::state::AppState;
 use crate::subsonic::auth::AuthenticatedUser;
 use crate::subsonic::params::SubsonicParams;
@@ -32,6 +33,20 @@ async fn stream_with_fallback(
     endpoint: &str,
     extra: &[(String, String)],
 ) -> Result<Response, FugueError> {
+    // Check if this is a remote track (from a friend's collaborative playlist)
+    if let Some((owner_node, remote_track_id)) = collab_playlist::decode_remote_track_id(id) {
+        let my_node = state.node_id().unwrap_or_default();
+        if owner_node == my_node {
+            // Track is ours — stream directly from our backend
+            debug!("stream collab track (ours) track={}", remote_track_id);
+            let (backend, original_id) = route_to_backend(state, &remote_track_id)?;
+            let params = build_stream_params(&original_id, extra);
+            return proxy_stream(backend, endpoint, &params).await;
+        }
+        debug!("stream remote track from node={} track={}", owner_node, remote_track_id);
+        return stream_from_friend(state, &owner_node, &remote_track_id).await;
+    }
+
     if is_dedup_id(id) {
         debug!("stream resolving dedup id={}", id);
 
@@ -209,3 +224,102 @@ pub async fn get_cover_art(
 
     stream_with_fallback(&state, id, "getCoverArt", &extra).await
 }
+
+/// Stream a track from a friend's Fugue node via Iroh QUIC.
+async fn stream_from_friend(
+    state: &AppState,
+    owner_node: &str,
+    track_id: &str,
+) -> Result<Response, FugueError> {
+    let endpoint = state.iroh().ok_or_else(|| {
+        FugueError::Internal("Social not enabled — cannot stream from friend".into())
+    })?;
+
+    debug!("stream_from_friend connecting to {} for track {}", owner_node, track_id);
+
+    // Look up the friend's ticket to get their full address (relay + direct IPs)
+    let friend = crate::social::friends::list_friends(state.db())
+        .await?
+        .into_iter()
+        .find(|f| f.public_key == owner_node);
+
+    let addr = if let Some(f) = friend {
+        match crate::social::node::parse_ticket(&f.ticket) {
+            Ok(addr) => {
+                // Register address so endpoint knows how to reach them
+                let memory_lookup = iroh::address_lookup::MemoryLookup::default();
+                memory_lookup.add_endpoint_info(addr.clone());
+                endpoint.address_lookup().add(memory_lookup);
+                debug!("stream_from_friend registered friend address with {} addrs", addr.addrs.len());
+                addr
+            }
+            Err(_) => {
+                let node_id: iroh::PublicKey = owner_node
+                    .parse()
+                    .map_err(|_| FugueError::Internal(format!("Invalid friend node ID: {owner_node}")))?;
+                iroh_base::EndpointAddr { id: node_id, addrs: Default::default() }
+            }
+        }
+    } else {
+        let node_id: iroh::PublicKey = owner_node
+            .parse()
+            .map_err(|_| FugueError::Internal(format!("Invalid friend node ID: {owner_node}")))?;
+        iroh_base::EndpointAddr { id: node_id, addrs: Default::default() }
+    };
+
+    debug!("stream_from_friend attempting QUIC connect...");
+
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        endpoint.connect(addr, crate::social::node::FUGUE_ALPN),
+    )
+    .await
+    .map_err(|_| FugueError::Backend("Connect to friend timed out after 10s".into()))?
+    .map_err(|e| FugueError::Backend(format!("Cannot connect to friend: {e}")))?;
+
+    debug!("stream_from_friend connected, opening stream...");
+
+    let (mut send, recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| FugueError::Backend(format!("Cannot open stream to friend: {e}")))?;
+
+    debug!("stream_from_friend sending StreamTrack request...");
+
+    let request = crate::social::protocol::RequestMessage::StreamTrack {
+        track_id: track_id.to_string(),
+    };
+    let request_bytes = serde_json::to_vec(&request)
+        .map_err(|e| FugueError::Internal(format!("serialize request: {e}")))?;
+    send.write_all(&request_bytes).await
+        .map_err(|e| FugueError::Backend(format!("write to friend: {e}")))?;
+    send.finish()
+        .map_err(|e| FugueError::Backend(format!("finish send: {e}")))?;
+
+    debug!("stream_from_friend streaming audio from friend...");
+
+    // Stream the QUIC recv directly to the client as a chunked response.
+    // No buffering — bytes flow through as they arrive.
+    let stream = futures::stream::unfold(recv, |mut recv| async move {
+        let mut buf = vec![0u8; 64 * 1024]; // 64KB chunks
+        match recv.read(&mut buf).await {
+            Ok(Some(n)) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(bytes::Bytes::from(buf)), recv))
+            }
+            Ok(None) => None, // stream finished
+            Err(e) => {
+                warn!("stream_from_friend read error: {}", e);
+                None
+            }
+        }
+    });
+
+    let body = axum::body::Body::from_stream(stream);
+
+    Ok(axum::response::Response::builder()
+        .header("content-type", "audio/mpeg")
+        .body(body)
+        .map_err(|e| FugueError::Internal(format!("build response: {e}")))?)
+}
+

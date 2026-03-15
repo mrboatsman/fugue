@@ -120,12 +120,14 @@ pub async fn get_top_songs(
 
 pub async fn get_now_playing(
     _auth: AuthenticatedUser,
+    State(state): State<AppState>,
     params: SubsonicParams,
 ) -> Result<impl IntoResponse, FugueError> {
     debug!("getNowPlaying");
+    let entries = crate::social::activity::get_now_playing(state.db()).await?;
     Ok(SubsonicResponse::ok(
         params.format,
-        json!({ "nowPlaying": { "entry": [] } }),
+        json!({ "nowPlaying": { "entry": entries } }),
     ))
 }
 
@@ -292,4 +294,62 @@ pub async fn get_artist_info2(
         }
         Err(_) => Ok(SubsonicResponse::ok(params.format, json!({ "artistInfo2": {} }))),
     }
+}
+
+pub async fn get_chat_messages(
+    _auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    params: SubsonicParams,
+) -> Result<impl IntoResponse, FugueError> {
+    let since: u64 = params.raw.get("since").and_then(|v| v.parse().ok()).unwrap_or(3600);
+    debug!("getChatMessages since={}s", since);
+
+    let messages = crate::social::activity::get_chat_messages(state.db(), since).await?;
+
+    // Convert to Subsonic chatMessage format
+    let chat_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| {
+            json!({
+                "username": m.get("username").and_then(|v| v.as_str()).unwrap_or(""),
+                "time": m.get("time").and_then(|v| v.as_str()).unwrap_or(""),
+                "message": m.get("message").and_then(|v| v.as_str()).unwrap_or(""),
+            })
+        })
+        .collect();
+
+    Ok(SubsonicResponse::ok(
+        params.format,
+        json!({ "chatMessages": { "chatMessage": chat_messages } }),
+    ))
+}
+
+pub async fn add_chat_message(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    params: SubsonicParams,
+) -> Result<impl IntoResponse, FugueError> {
+    let message = params
+        .raw
+        .get("message")
+        .ok_or_else(|| FugueError::missing("message"))?;
+
+    debug!("addChatMessage user={} message={}", auth.username, message);
+
+    // Store locally
+    let node_id = state.node_id().unwrap_or_else(|| "local".into());
+    crate::social::activity::add_chat_message(
+        state.db(),
+        &node_id,
+        &auth.username,
+        message,
+    )
+    .await?;
+
+    // Broadcast to friends if social is enabled
+    if let Some(social) = state.social() {
+        social.broadcast_chat(message).await;
+    }
+
+    Ok(SubsonicResponse::empty(params.format))
 }

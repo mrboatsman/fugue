@@ -12,6 +12,8 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub social: SocialConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -78,6 +80,27 @@ impl Default for CacheConfig {
         Self {
             db_path: default_db_path(),
             refresh_interval_secs: default_refresh_interval(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SocialConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_display_name")]
+    pub display_name: String,
+}
+
+fn default_display_name() -> String {
+    "Fugue User".into()
+}
+
+impl Default for SocialConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            display_name: default_display_name(),
         }
     }
 }

@@ -173,6 +173,10 @@ weight = 5   # lower weight = fallback source
 
 [cache]
 db_path = "fugue.db"
+
+[social]
+enabled = true
+display_name = "Anders"
 ```
 
 #### Backend Weight
@@ -213,12 +217,81 @@ cargo run -- check
 Then point your Subsonic client at `http://your-host:4535` with the credentials
 from `[auth.users]`.
 
+### Social / P2P
+
+Fugue includes an optional P2P social layer powered by
+[Iroh](https://iroh.computer). Connect directly with friends to share
+libraries, playlists, and listening activity — no ports to open, no backend
+credentials to share.
+
+Enable it in your config:
+```toml
+[social]
+enabled = true
+display_name = "Anders"
+```
+
+Then use the CLI to manage friends:
+```bash
+# Show your ticket (give this to friends)
+fugue ticket
+
+# Add a friend
+fugue friend add --name "Pelle" <ticket>
+
+# List friends and their status
+fugue friend list
+
+# Remove a friend
+fugue friend remove Pelle
+```
+
+When social is enabled, Fugue generates a persistent identity (ed25519 keypair)
+stored in the database. Friends connect directly via Iroh's QUIC transport with
+automatic NAT traversal — works behind firewalls without any port forwarding.
+
+
+
+#### Colaborative playlists
+How the CRDT works
+
+Operation log: Every change to a collaborative playlist is stored as an operation in crdt_ops:
+- AddTrack — adds a track with metadata
+- RemoveTrack — removes a track
+- SetName — renames the playlist
+- Each op has a unique op_id ({node_id}:{lamport_timestamp}) so duplicates are ignored
+
+Materialized view: After operations are stored, rebuild_playlist replays all ops in timestamp order to compute the current track list. This is what getPlaylist serves.
+
+Sync:
+- When any change happens, the new CRDT ops are broadcast via gossip
+- When a peer connects (NeighborUp), ALL ops for all playlists are broadcast
+- merge_ops is idempotent — same op arriving twice is ignored (INSERT OR IGNORE)
+- After merging, the materialized view is rebuilt
+
+```
+Offline resilience:
+Node A adds track X (offline)     Node B adds track Y (offline)
+  op: A:1 AddTrack(X)               op: B:1 AddTrack(Y)
+                  \                 /
+                   --- reconnect ---
+                  /                 \
+  receives B:1, merges              receives A:1, merges
+  rebuild: [X, Y]                   rebuild: [X, Y]
+  ✓ both converge                   ✓ both converge
+
+```
+Both nodes end up with the same playlist — no data loss, no conflicts.
+
+
+
 ## Tech Stack
 
 - **Rust** + **axum** + **tokio** — async HTTP server
 - **reqwest** — HTTP client with connection pooling (rustls)
 - **sqlx** + **SQLite** — local playlists, favorites, and migration management
 - **serde** + **serde_json** — Subsonic JSON parsing and response serialization
+- **iroh** — P2P networking (QUIC, CRDT documents, gossip) for social features
 - **figment** — TOML + environment variable config
 - **tracing** — structured logging
 - **clap** — CLI
