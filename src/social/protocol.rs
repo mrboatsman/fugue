@@ -62,6 +62,8 @@ pub enum RequestMessage {
     GetAlbum { album_id: String },
     /// Request to stream a track (returns raw audio bytes).
     StreamTrack { track_id: String },
+    /// Request cover art for a track (returns image bytes).
+    StreamCoverArt { track_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

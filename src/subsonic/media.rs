@@ -43,8 +43,8 @@ async fn stream_with_fallback(
             let params = build_stream_params(&original_id, extra);
             return proxy_stream(backend, endpoint, &params).await;
         }
-        debug!("stream remote track from node={} track={}", owner_node, remote_track_id);
-        return stream_from_friend(state, &owner_node, &remote_track_id).await;
+        debug!("stream remote {} from node={} track={}", endpoint, owner_node, remote_track_id);
+        return stream_from_friend(state, &owner_node, &remote_track_id, endpoint).await;
     }
 
     if is_dedup_id(id) {
@@ -230,6 +230,7 @@ async fn stream_from_friend(
     state: &AppState,
     owner_node: &str,
     track_id: &str,
+    endpoint_type: &str,
 ) -> Result<Response, FugueError> {
     let endpoint = state.iroh().ok_or_else(|| {
         FugueError::Internal("Social not enabled — cannot stream from friend".into())
@@ -284,10 +285,16 @@ async fn stream_from_friend(
         .await
         .map_err(|e| FugueError::Backend(format!("Cannot open stream to friend: {e}")))?;
 
-    debug!("stream_from_friend sending StreamTrack request...");
-
-    let request = crate::social::protocol::RequestMessage::StreamTrack {
-        track_id: track_id.to_string(),
+    let request = if endpoint_type == "getCoverArt" {
+        debug!("stream_from_friend sending StreamCoverArt request...");
+        crate::social::protocol::RequestMessage::StreamCoverArt {
+            track_id: track_id.to_string(),
+        }
+    } else {
+        debug!("stream_from_friend sending StreamTrack request...");
+        crate::social::protocol::RequestMessage::StreamTrack {
+            track_id: track_id.to_string(),
+        }
     };
     let request_bytes = serde_json::to_vec(&request)
         .map_err(|e| FugueError::Internal(format!("serialize request: {e}")))?;
@@ -317,8 +324,14 @@ async fn stream_from_friend(
 
     let body = axum::body::Body::from_stream(stream);
 
+    let content_type = if endpoint_type == "getCoverArt" {
+        "image/jpeg"
+    } else {
+        "audio/mpeg"
+    };
+
     Ok(axum::response::Response::builder()
-        .header("content-type", "audio/mpeg")
+        .header("content-type", content_type)
         .body(body)
         .map_err(|e| FugueError::Internal(format!("build response: {e}")))?)
 }

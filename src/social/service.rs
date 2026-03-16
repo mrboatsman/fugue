@@ -97,23 +97,39 @@ pub async fn start(
                     info!("social: peer connected: {}", peer);
                     let _ = friends::update_last_seen(&db_clone, &peer.to_string()).await;
 
-                    // When a peer connects, send CRDT ops for all collab playlists
-                    let playlists: Vec<(String,)> = sqlx::query_as(
-                        "SELECT id FROM collab_playlists",
+                    // When a peer connects, sync all collab playlists
+                    let playlists: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT id, name FROM collab_playlists",
                     )
                     .fetch_all(&db_clone)
                     .await
                     .unwrap_or_default();
 
-                    for (pid,) in playlists {
-                        if let Ok(ops) = crdt::get_all_ops(&db_clone, &pid).await {
-                            if !ops.is_empty() {
-                                let msg = GossipMessage::CrdtSync {
-                                    playlist_id: pid.clone(),
-                                    ops,
-                                };
-                                if let Err(e) = handle_sender.lock().await.broadcast(msg.to_bytes()).await {
-                                    debug!("social: CRDT sync broadcast failed for {}: {}", pid, e);
+                    for (pid, pname) in playlists {
+                        // Try CRDT ops first
+                        let ops = crdt::get_all_ops(&db_clone, &pid).await.unwrap_or_default();
+                        if !ops.is_empty() {
+                            let msg = GossipMessage::CrdtSync {
+                                playlist_id: pid.clone(),
+                                ops,
+                            };
+                            if let Err(e) = handle_sender.lock().await.broadcast(msg.to_bytes()).await {
+                                debug!("social: CRDT sync broadcast failed for {}: {}", pid, e);
+                            }
+                        } else {
+                            // Fallback: send FullSync for playlists with no CRDT ops yet
+                            if let Ok(tracks) = collab_playlist::get_all_tracks(&db_clone, &pid).await {
+                                if !tracks.is_empty() {
+                                    let msg = GossipMessage::Playlist {
+                                        op: collab_playlist::PlaylistOp::FullSync {
+                                            playlist_id: pid.clone(),
+                                            name: pname,
+                                            tracks,
+                                        },
+                                    };
+                                    if let Err(e) = handle_sender.lock().await.broadcast(msg.to_bytes()).await {
+                                        debug!("social: FullSync broadcast failed for {}: {}", pid, e);
+                                    }
                                 }
                             }
                         }
@@ -312,9 +328,30 @@ async fn handle_playlist_op(db: &SqlitePool, sender_node: &str, op: &collab_play
         PlaylistOp::FullSync { playlist_id, name, tracks } => {
             debug!("social: collab playlist full sync: {} ({} tracks)", name, tracks.len());
             let _ = collab_playlist::create_playlist(db, playlist_id, name, sender_node).await;
-            for track in tracks {
-                let _ = collab_playlist::add_track(db, playlist_id, track).await;
+
+            // Backfill CRDT ops from the FullSync so the op log is complete.
+            // This ensures rebuild_playlist doesn't lose these tracks.
+            for (i, track) in tracks.iter().enumerate() {
+                let op = crdt::CrdtOp {
+                    op_id: format!("fullsync:{}:{}", sender_node, i),
+                    timestamp: i as u64 + 1,
+                    origin_node: track.added_by.clone(),
+                    kind: crdt::CrdtOpKind::AddTrack { track: track.clone() },
+                };
+                let _ = crdt::store_op(db, playlist_id, &op).await;
             }
+
+            // Also store the name
+            let name_op = crdt::CrdtOp {
+                op_id: format!("fullsync:{}:name", sender_node),
+                timestamp: 0,
+                origin_node: sender_node.to_string(),
+                kind: crdt::CrdtOpKind::SetName { name: name.clone() },
+            };
+            let _ = crdt::store_op(db, playlist_id, &name_op).await;
+
+            // Rebuild from the op log
+            let _ = crdt::rebuild_playlist(db, playlist_id).await;
         }
     }
 }
@@ -334,8 +371,15 @@ async fn handle_connection(
     match request {
         RequestMessage::StreamTrack { track_id } => {
             debug!("social: stream request for track {}", track_id);
-            if let Err(e) = stream_track_for_peer(backends, &track_id, &mut send).await {
+            if let Err(e) = stream_from_backend_for_peer(backends, "stream", &track_id, &mut send).await {
                 error!("social: stream failed for {}: {}", track_id, e);
+            }
+            return Ok(());
+        }
+        RequestMessage::StreamCoverArt { track_id } => {
+            debug!("social: cover art request for track {}", track_id);
+            if let Err(e) = stream_from_backend_for_peer(backends, "getCoverArt", &track_id, &mut send).await {
+                error!("social: cover art failed for {}: {}", track_id, e);
             }
             return Ok(());
         }
@@ -369,7 +413,7 @@ async fn handle_connection(
                 },
             }
         }
-        RequestMessage::StreamTrack { .. } => unreachable!(),
+        RequestMessage::StreamTrack { .. } | RequestMessage::StreamCoverArt { .. } => unreachable!(),
     };
 
     let response_bytes = serde_json::to_vec(&response)?;
@@ -379,10 +423,11 @@ async fn handle_connection(
     Ok(())
 }
 
-/// Stream a track from our backends to a requesting peer.
-/// Writes directly to the QUIC send stream to avoid buffering the whole file.
-async fn stream_track_for_peer(
+/// Stream content (audio or cover art) from our backend to a requesting peer.
+/// Writes directly to the QUIC send stream to avoid buffering.
+async fn stream_from_backend_for_peer(
     backends: &[BackendClient],
+    endpoint: &str,
     track_id: &str,
     send: &mut iroh::endpoint::SendStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -393,14 +438,13 @@ async fn stream_track_for_peer(
         .find(|b| b.index == backend_idx)
         .ok_or_else(|| format!("Backend {} not found", backend_idx))?;
 
-    debug!("social: streaming track {} from backend {}", original_id, backend.name);
+    debug!("social: streaming {} {} from backend {}", endpoint, original_id, backend.name);
 
     let resp = backend
-        .request_stream("stream", &[("id", &original_id)])
+        .request_stream(endpoint, &[("id", &original_id)])
         .await
-        .map_err(|e| format!("Backend stream failed: {e}"))?;
+        .map_err(|e| format!("Backend {} failed: {e}", endpoint))?;
 
-    // Stream chunks from backend to QUIC send stream
     use futures::StreamExt;
     let mut stream = resp.bytes_stream();
     let mut total = 0usize;
@@ -411,7 +455,7 @@ async fn stream_track_for_peer(
     }
     send.finish().map_err(|e| format!("Finish send: {e}"))?;
 
-    debug!("social: streamed {} bytes for track {}", total, track_id);
+    debug!("social: streamed {} bytes ({}) for {}", total, endpoint, track_id);
     Ok(())
 }
 

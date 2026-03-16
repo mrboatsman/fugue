@@ -354,13 +354,25 @@ pub async fn delete_playlist(
     Ok(SubsonicResponse::empty(params.format))
 }
 
-/// Broadcast a full sync of a collaborative playlist to all friends.
-/// This is called after every change to ensure all nodes converge.
-/// If gossip isn't connected, the broadcast is a no-op — the next
-/// NeighborUp event will trigger a full sync automatically.
-async fn broadcast_playlist_full_sync(state: &AppState, playlist_id: &str) {
+/// Broadcast the current state of a collaborative playlist to all friends.
+/// Uses CRDT ops if available, falls back to FullSync for legacy playlists.
+async fn broadcast_playlist_sync(state: &AppState, playlist_id: &str) {
     let Some(social) = state.social() else { return };
 
+    // Try CRDT ops first
+    let ops = crdt::get_all_ops(state.db(), playlist_id).await.unwrap_or_default();
+    if !ops.is_empty() {
+        let msg = crate::social::protocol::GossipMessage::CrdtSync {
+            playlist_id: playlist_id.to_string(),
+            ops,
+        };
+        let sender = social.sender().await;
+        let _ = sender.broadcast(msg.to_bytes()).await;
+        debug!("broadcast CRDT sync for collab playlist {}", playlist_id);
+        return;
+    }
+
+    // Fallback: FullSync for legacy playlists without CRDT ops
     let name = sqlx::query_as::<_, (String,)>(
         "SELECT name FROM collab_playlists WHERE id = ?",
     )
@@ -382,7 +394,7 @@ async fn broadcast_playlist_full_sync(state: &AppState, playlist_id: &str) {
         tracks,
     }).await;
 
-    debug!("broadcast full sync for collab playlist {}", playlist_id);
+    debug!("broadcast FullSync for collab playlist {}", playlist_id);
 }
 
 /// Resolve a track's metadata for inclusion in a collaborative playlist.
