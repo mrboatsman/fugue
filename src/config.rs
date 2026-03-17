@@ -90,6 +90,8 @@ pub struct SocialConfig {
     pub enabled: bool,
     #[serde(default = "default_display_name")]
     pub display_name: String,
+    #[serde(default)]
+    pub streaming: StreamingConfig,
 }
 
 fn default_display_name() -> String {
@@ -101,6 +103,44 @@ impl Default for SocialConfig {
         Self {
             enabled: false,
             display_name: default_display_name(),
+            streaming: StreamingConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StreamingConfig {
+    /// Max bitrate (kbps) to serve to friends. "0" = no limit (raw/original).
+    #[serde(default)]
+    pub max_serve_bitrate: u32,
+    /// Format to transcode to when serving to friends. "raw" = original format.
+    #[serde(default = "default_serve_format")]
+    pub serve_format: String,
+    /// Preferred bitrate when receiving from friends.
+    /// "0" = auto (adaptive based on measured bandwidth).
+    /// Any other value = fixed cap in kbps.
+    #[serde(default)]
+    pub preferred_bitrate: u32,
+    /// Preferred format when receiving from friends. "auto" = accept whatever.
+    #[serde(default = "default_preferred_format")]
+    pub preferred_format: String,
+}
+
+fn default_serve_format() -> String {
+    "raw".into()
+}
+
+fn default_preferred_format() -> String {
+    "auto".into()
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            max_serve_bitrate: 0,        // no limit
+            serve_format: default_serve_format(),
+            preferred_bitrate: 0,         // auto
+            preferred_format: default_preferred_format(),
         }
     }
 }

@@ -40,6 +40,18 @@ enabled = false
 # Your display name visible to friends
 display_name = "Fugue User"
 
+# Streaming quality for P2P music sharing
+[social.streaming]
+# Max bitrate (kbps) to serve to friends. 0 = no limit (original quality).
+max_serve_bitrate = 0
+# Format when transcoding for friends. "raw" = send original format.
+serve_format = "raw"
+# Preferred bitrate when receiving from friends.
+# 0 = auto (adaptive based on measured connection speed).
+preferred_bitrate = 0
+# Preferred format when receiving. "auto" = accept whatever sender provides.
+preferred_format = "auto"
+
 # Manage friends via CLI:
 #   fugue ticket                              # Show your ticket
 #   fugue friend add --name "Pelle" <ticket>  # Add a friend

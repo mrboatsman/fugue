@@ -61,7 +61,15 @@ pub enum RequestMessage {
     /// Request a specific album's tracks.
     GetAlbum { album_id: String },
     /// Request to stream a track (returns raw audio bytes).
-    StreamTrack { track_id: String },
+    StreamTrack {
+        track_id: String,
+        /// Requested max bitrate in kbps. 0 = no preference (sender decides).
+        #[serde(default)]
+        max_bitrate: u32,
+        /// Requested format. Empty = no preference.
+        #[serde(default)]
+        format: String,
+    },
     /// Request cover art for a track (returns image bytes).
     StreamCoverArt { track_id: String },
 }

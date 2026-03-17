@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use crate::config::Config;
 use crate::health::probe::HealthRegistry;
 use crate::proxy::backend::BackendClient;
+use crate::social::bandwidth::BandwidthTracker;
 use crate::social::service::SocialHandle;
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct AppStateInner {
     pub health: HealthRegistry,
     pub iroh: Option<Endpoint>,
     pub social: Option<SocialHandle>,
+    pub bandwidth: BandwidthTracker,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
                 health,
                 iroh: None,
                 social: None,
+                bandwidth: BandwidthTracker::new(),
             }),
         }
     }
@@ -57,6 +60,7 @@ impl AppState {
                 health,
                 iroh: Some(endpoint),
                 social: Some(social_handle),
+                bandwidth: BandwidthTracker::new(),
             }),
         }
     }
@@ -87,6 +91,10 @@ impl AppState {
 
     pub fn social(&self) -> Option<&SocialHandle> {
         self.inner.social.as_ref()
+    }
+
+    pub fn bandwidth(&self) -> &BandwidthTracker {
+        &self.inner.bandwidth
     }
 
     pub fn node_id(&self) -> Option<String> {

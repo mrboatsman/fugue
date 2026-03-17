@@ -8,6 +8,7 @@ use crate::error::FugueError;
 use crate::id::is_dedup_id;
 use crate::proxy::router::route_to_backend;
 use crate::proxy::stream::proxy_stream;
+use crate::social::bandwidth;
 use crate::social::collab_playlist;
 use crate::state::AppState;
 use crate::subsonic::auth::AuthenticatedUser;
@@ -291,9 +292,28 @@ async fn stream_from_friend(
             track_id: track_id.to_string(),
         }
     } else {
-        debug!("stream_from_friend sending StreamTrack request...");
+        // Select quality based on measured bandwidth + config
+        let measured_kbps = state.bandwidth().effective_kbps(owner_node);
+        let streaming_config = &state.config().social.streaming;
+        let (max_bitrate, format) = bandwidth::select_quality(
+            measured_kbps,
+            0,  // sender cap is applied on sender side
+            "raw",
+            streaming_config.preferred_bitrate,
+            &streaming_config.preferred_format,
+        );
+
+        let br = max_bitrate.unwrap_or(0);
+        let fmt = format.unwrap_or_default();
+        debug!(
+            "stream_from_friend quality: measured={}kbps -> maxBitRate={} format={}",
+            measured_kbps, br, fmt
+        );
+
         crate::social::protocol::RequestMessage::StreamTrack {
             track_id: track_id.to_string(),
+            max_bitrate: br,
+            format: fmt,
         }
     };
     let request_bytes = serde_json::to_vec(&request)
@@ -306,21 +326,44 @@ async fn stream_from_friend(
     debug!("stream_from_friend streaming audio from friend...");
 
     // Stream the QUIC recv directly to the client as a chunked response.
-    // No buffering — bytes flow through as they arrive.
-    let stream = futures::stream::unfold(recv, |mut recv| async move {
-        let mut buf = vec![0u8; 64 * 1024]; // 64KB chunks
-        match recv.read(&mut buf).await {
-            Ok(Some(n)) => {
-                buf.truncate(n);
-                Some((Ok::<_, std::io::Error>(bytes::Bytes::from(buf)), recv))
+    // Track bytes and time for passive bandwidth measurement.
+    let bw_tracker = state.bandwidth().clone();
+    let peer_id = owner_node.to_string();
+    let start_time = std::time::Instant::now();
+    let bytes_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bytes_counter_clone = bytes_counter.clone();
+
+    let stream = futures::stream::unfold(
+        (recv, bw_tracker, peer_id, start_time, bytes_counter_clone),
+        |(mut recv, tracker, peer_id, start, counter)| async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            match recv.read(&mut buf).await {
+                Ok(Some(n)) => {
+                    buf.truncate(n);
+                    counter.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                    Some((Ok::<_, std::io::Error>(bytes::Bytes::from(buf)), (recv, tracker, peer_id, start, counter)))
+                }
+                Ok(None) => {
+                    // Stream complete — update bandwidth measurement
+                    let total = counter.load(std::sync::atomic::Ordering::Relaxed);
+                    let elapsed = start.elapsed();
+                    if total > 0 && elapsed.as_millis() > 0 {
+                        tracker.update_from_stream(&peer_id, total, elapsed);
+                    }
+                    None
+                }
+                Err(_) => {
+                    // Also measure on error
+                    let total = counter.load(std::sync::atomic::Ordering::Relaxed);
+                    let elapsed = start.elapsed();
+                    if total > 0 && elapsed.as_millis() > 0 {
+                        tracker.update_from_stream(&peer_id, total, elapsed);
+                    }
+                    None
+                }
             }
-            Ok(None) => None, // stream finished
-            Err(e) => {
-                warn!("stream_from_friend read error: {}", e);
-                None
-            }
-        }
-    });
+        },
+    );
 
     let body = axum::body::Body::from_stream(stream);
 

@@ -4,5 +4,6 @@ pub mod library;
 pub mod activity;
 pub mod protocol;
 pub mod service;
+pub mod bandwidth;
 pub mod collab_playlist;
 pub mod crdt;

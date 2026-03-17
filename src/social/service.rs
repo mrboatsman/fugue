@@ -369,16 +369,16 @@ async fn handle_connection(
     debug!("social: direct request: {:?}", request);
 
     match request {
-        RequestMessage::StreamTrack { track_id } => {
-            debug!("social: stream request for track {}", track_id);
-            if let Err(e) = stream_from_backend_for_peer(backends, "stream", &track_id, &mut send).await {
+        RequestMessage::StreamTrack { track_id, max_bitrate, format } => {
+            debug!("social: stream request for track {} (maxBitRate={}, format={})", track_id, max_bitrate, format);
+            if let Err(e) = stream_from_backend_for_peer(backends, "stream", &track_id, max_bitrate, &format, &mut send).await {
                 error!("social: stream failed for {}: {}", track_id, e);
             }
             return Ok(());
         }
         RequestMessage::StreamCoverArt { track_id } => {
             debug!("social: cover art request for track {}", track_id);
-            if let Err(e) = stream_from_backend_for_peer(backends, "getCoverArt", &track_id, &mut send).await {
+            if let Err(e) = stream_from_backend_for_peer(backends, "getCoverArt", &track_id, 0, "", &mut send).await {
                 error!("social: cover art failed for {}: {}", track_id, e);
             }
             return Ok(());
@@ -413,7 +413,8 @@ async fn handle_connection(
                 },
             }
         }
-        RequestMessage::StreamTrack { .. } | RequestMessage::StreamCoverArt { .. } => unreachable!(),
+        RequestMessage::StreamTrack { .. }
+        | RequestMessage::StreamCoverArt { .. } => unreachable!(),
     };
 
     let response_bytes = serde_json::to_vec(&response)?;
@@ -429,6 +430,8 @@ async fn stream_from_backend_for_peer(
     backends: &[BackendClient],
     endpoint: &str,
     track_id: &str,
+    max_bitrate: u32,
+    format: &str,
     send: &mut iroh::endpoint::SendStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (backend_idx, original_id) = crate::id::decode_id(track_id)?;
@@ -438,10 +441,23 @@ async fn stream_from_backend_for_peer(
         .find(|b| b.index == backend_idx)
         .ok_or_else(|| format!("Backend {} not found", backend_idx))?;
 
-    debug!("social: streaming {} {} from backend {}", endpoint, original_id, backend.name);
+    let mut params: Vec<(&str, String)> = vec![("id", original_id.clone())];
+    let br_str;
+    if max_bitrate > 0 {
+        br_str = max_bitrate.to_string();
+        params.push(("maxBitRate", br_str.clone()));
+        debug!("social: streaming {} {} from backend {} (maxBitRate={}, format={})",
+            endpoint, original_id, backend.name, max_bitrate, format);
+    } else {
+        debug!("social: streaming {} {} from backend {} (raw)", endpoint, original_id, backend.name);
+    }
+    if !format.is_empty() && format != "raw" && format != "auto" {
+        params.push(("format", format.to_string()));
+    }
 
+    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let resp = backend
-        .request_stream(endpoint, &[("id", &original_id)])
+        .request_stream(endpoint, &param_refs)
         .await
         .map_err(|e| format!("Backend {} failed: {e}", endpoint))?;
 
