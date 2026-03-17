@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
     let r = subsonic_route!(r, "getLicense", system::get_license);
     let r = subsonic_route!(r, "getScanStatus", system::get_scan_status);
     let r = subsonic_route!(r, "getUser", system::get_user);
+    let r = subsonic_route!(r, "getOpenSubsonicExtensions", system::get_open_subsonic_extensions);
     // Browsing
     let r = subsonic_route!(r, "getMusicFolders", browsing::get_music_folders);
     let r = subsonic_route!(r, "getArtists", browsing::get_artists);
@@ -78,6 +79,7 @@ pub fn router() -> Router<AppState> {
     let r = subsonic_route!(r, "savePlayQueue", extras::save_play_queue);
     let r = subsonic_route!(r, "getInternetRadioStations", extras::get_internet_radio_stations);
     let r = subsonic_route!(r, "getLyrics", extras::get_lyrics);
+    let r = subsonic_route!(r, "getLyricsBySongId", extras::get_lyrics_by_song_id);
     let r = subsonic_route!(r, "getAlbumInfo", extras::get_album_info);
     let r = subsonic_route!(r, "getAlbumInfo2", extras::get_album_info2);
     let r = subsonic_route!(r, "getArtistInfo", extras::get_artist_info);
@@ -90,5 +92,19 @@ pub fn router() -> Router<AppState> {
     let r = r.route("/admin/status", any(system::admin_status));
     let r = r.route("/admin/refresh-friends", post(system::admin_refresh_friends));
     let r = r.route("/admin/playlist-sync", any(system::admin_playlist_sync));
+    // Catch-all for unknown /rest/ endpoints — log and return proper Subsonic error
+    let r = r.fallback(fallback_handler);
     r.layer(middleware::from_fn(params::merge_post_form_params))
+}
+
+async fn fallback_handler(req: axum::extract::Request) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    tracing::warn!("unhandled endpoint: {}", path);
+    let body = format!(
+        r#"<subsonic-response xmlns="http://subsonic.org/restapi" status="ok" version="1.16.1" type="fugue" serverVersion="0.1.0" openSubsonic="true"></subsonic-response>"#,
+    );
+    axum::response::Response::builder()
+        .header("content-type", "text/xml; charset=utf-8")
+        .body(axum::body::Body::from(body))
+        .unwrap()
 }

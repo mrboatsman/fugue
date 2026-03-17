@@ -264,6 +264,22 @@ pub async fn admin_playlist_sync(
     }
 }
 
+pub async fn get_open_subsonic_extensions(
+    _auth: AuthenticatedUser,
+    params: SubsonicParams,
+) -> Result<impl IntoResponse, FugueError> {
+    Ok(SubsonicResponse::ok(
+        params.format,
+        json!({
+            "openSubsonicExtensions": [
+                { "name": "formPost", "versions": [1] },
+                { "name": "songLyrics", "versions": [1] },
+                { "name": "transcodeOffset", "versions": [1] }
+            ]
+        }),
+    ))
+}
+
 pub async fn get_scan_status(
     _auth: AuthenticatedUser,
     params: SubsonicParams,

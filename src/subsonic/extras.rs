@@ -214,6 +214,31 @@ pub async fn get_lyrics(
     ))
 }
 
+pub async fn get_lyrics_by_song_id(
+    _auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    params: SubsonicParams,
+) -> Result<impl IntoResponse, FugueError> {
+    let id = params.raw.get("id").ok_or_else(|| FugueError::missing("id"))?;
+    debug!("getLyricsBySongId id={}", id);
+
+    match route_to_backend(&state, id) {
+        Ok((backend, original_id)) => {
+            match backend.request_json("getLyricsBySongId", &[("id", &original_id)]).await {
+                Ok(resp) => Ok(SubsonicResponse::ok(params.format, resp)),
+                Err(_) => Ok(SubsonicResponse::ok(
+                    params.format,
+                    json!({ "lyricsList": { "structuredLyrics": [] } }),
+                )),
+            }
+        }
+        Err(_) => Ok(SubsonicResponse::ok(
+            params.format,
+            json!({ "lyricsList": { "structuredLyrics": [] } }),
+        )),
+    }
+}
+
 pub async fn get_album_info(
     _auth: AuthenticatedUser,
     State(state): State<AppState>,
