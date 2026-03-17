@@ -10,7 +10,7 @@ use crate::error::FugueError;
 use crate::state::AppState;
 
 /// Extractor that validates Subsonic client authentication.
-/// Must be used with AppState.
+/// Supports: token+salt, plaintext password, and API key.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub username: String,
@@ -34,6 +34,19 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             .map_err(|_| FugueError::AuthFailed)?;
 
         let params = query.params;
+
+        // Check for API key auth first (OpenSubsonic extension)
+        if let Some(api_key) = params.get("apiKey") {
+            // Error if both apiKey and u are provided
+            if params.contains_key("u") {
+                return Err(FugueError::Subsonic {
+                    code: 43,
+                    message: "Multiple conflicting authentication mechanisms provided".into(),
+                });
+            }
+            return verify_api_key(state, api_key).await;
+        }
+
         let username = params.get("u").ok_or_else(|| {
             error!("auth failed: missing username parameter");
             FugueError::AuthFailed
@@ -97,7 +110,90 @@ fn verify_token(password: &str, salt: &str, token: &str) -> bool {
     expected == token.to_lowercase()
 }
 
-// Helper to validate auth without being an extractor (for manual use)
+/// Verify an API key against stored keys in the database.
+async fn verify_api_key(state: &AppState, api_key: &str) -> Result<AuthenticatedUser, FugueError> {
+    use sha2::{Sha256, Digest as Sha2Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(api_key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
+
+    let row: Option<(String, )> = sqlx::query_as(
+        "SELECT username FROM api_keys WHERE key_hash = ?",
+    )
+    .bind(&key_hash)
+    .fetch_optional(state.db())
+    .await
+    .map_err(|_| FugueError::AuthFailed)?;
+
+    match row {
+        Some((username,)) => {
+            // Update last_used
+            let _ = sqlx::query("UPDATE api_keys SET last_used = datetime('now') WHERE key_hash = ?")
+                .bind(&key_hash)
+                .execute(state.db())
+                .await;
+            debug!("auth ok user={} method=apiKey", username);
+            Ok(AuthenticatedUser { username })
+        }
+        None => {
+            error!("auth failed: invalid API key");
+            Err(FugueError::AuthFailed)
+        }
+    }
+}
+
+/// Generate a new API key for a user. Returns the plaintext key.
+pub async fn create_api_key(
+    db: &sqlx::SqlitePool,
+    username: &str,
+    label: &str,
+) -> Result<String, FugueError> {
+    use sha2::{Sha256, Digest as Sha2Digest};
+
+    // Generate a random key
+    let key_bytes: [u8; 32] = rand::random();
+    let api_key = hex::encode(key_bytes);
+
+    // Store the hash
+    let mut hasher = Sha256::new();
+    hasher.update(api_key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
+
+    sqlx::query("INSERT INTO api_keys (key_hash, username, label) VALUES (?, ?, ?)")
+        .bind(&key_hash)
+        .bind(username)
+        .bind(label)
+        .execute(db)
+        .await?;
+
+    debug!("created API key for user={} label={}", username, label);
+    Ok(api_key)
+}
+
+/// Revoke an API key by its hash prefix (first 16 chars).
+pub async fn revoke_api_key(db: &sqlx::SqlitePool, hash_prefix: &str) -> Result<bool, FugueError> {
+    let result = sqlx::query("DELETE FROM api_keys WHERE key_hash LIKE ?")
+        .bind(format!("{}%", hash_prefix))
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// List API keys for a user (shows hash prefix + label, not the key itself).
+pub async fn list_api_keys(
+    db: &sqlx::SqlitePool,
+    username: &str,
+) -> Result<Vec<(String, String, String, Option<String>)>, FugueError> {
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT key_hash, username, label, last_used FROM api_keys WHERE username = ? ORDER BY created_at",
+    )
+    .bind(username)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+// Legacy helper
 pub fn validate_auth(
     auth_config: &AuthConfig,
     username: &str,

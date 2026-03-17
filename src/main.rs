@@ -50,6 +50,11 @@ enum Commands {
         #[command(subcommand)]
         action: FriendAction,
     },
+    /// Manage API keys
+    ApiKey {
+        #[command(subcommand)]
+        action: ApiKeyAction,
+    },
     /// Manage collaborative playlists
     Playlist {
         #[command(subcommand)]
@@ -74,6 +79,30 @@ enum FriendAction {
     },
     /// List all friends
     List,
+}
+
+#[derive(Subcommand)]
+enum ApiKeyAction {
+    /// Create a new API key
+    Create {
+        /// Username the key belongs to
+        #[arg(long)]
+        user: String,
+        /// Label for this key (e.g. "phone", "desktop")
+        #[arg(long, default_value = "")]
+        label: String,
+    },
+    /// List API keys for a user
+    List {
+        /// Username
+        #[arg(long)]
+        user: String,
+    },
+    /// Revoke an API key by hash prefix
+    Revoke {
+        /// First characters of the key hash (from `api-key list`)
+        hash_prefix: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -147,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Ticket => ticket(config).await?,
         Commands::Status => status(config).await?,
         Commands::Friend { action } => friend(config, action).await?,
+        Commands::ApiKey { action } => api_key(config, action).await?,
         Commands::Playlist { action } => playlist(config, action).await?,
     }
 
@@ -414,6 +444,49 @@ async fn status(config: Config) -> anyhow::Result<()> {
         Err(e) => {
             error!("Could not connect to Fugue server: {e}");
             error!("Is Fugue running? Start it with: fugue serve");
+        }
+    }
+
+    Ok(())
+}
+
+async fn api_key(config: Config, action: ApiKeyAction) -> anyhow::Result<()> {
+    let db = init_db(&config).await?;
+
+    match action {
+        ApiKeyAction::Create { user, label } => {
+            // Verify user exists in config
+            if !config.auth.users.iter().any(|u| u.username == user) {
+                eprintln!("User '{}' not found in config", user);
+                std::process::exit(1);
+            }
+            let key = subsonic::auth::create_api_key(&db, &user, &label).await?;
+            println!("API key created for user: {user}");
+            println!("Key: {key}");
+            println!();
+            println!("Use it with: ?apiKey={key}");
+            println!("This key is shown only once — store it securely.");
+        }
+        ApiKeyAction::List { user } => {
+            let keys = subsonic::auth::list_api_keys(&db, &user).await?;
+            if keys.is_empty() {
+                println!("No API keys for user: {user}");
+            } else {
+                println!("{:<18} {:<20} {}", "Hash (prefix)", "Label", "Last used");
+                println!("{}", "-".repeat(55));
+                for (hash, _username, label, last_used) in &keys {
+                    let prefix = &hash[..16.min(hash.len())];
+                    let lu = last_used.as_deref().unwrap_or("never");
+                    println!("{:<18} {:<20} {}", prefix, label, lu);
+                }
+            }
+        }
+        ApiKeyAction::Revoke { hash_prefix } => {
+            if subsonic::auth::revoke_api_key(&db, &hash_prefix).await? {
+                println!("API key revoked.");
+            } else {
+                println!("No matching API key found.");
+            }
         }
     }
 

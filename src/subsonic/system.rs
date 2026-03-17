@@ -275,7 +275,8 @@ pub async fn get_open_subsonic_extensions(
                 { "name": "formPost", "versions": [1] },
                 { "name": "songLyrics", "versions": [1] },
                 { "name": "transcodeOffset", "versions": [1] },
-                { "name": "playbackReport", "versions": [1] }
+                { "name": "playbackReport", "versions": [1] },
+                { "name": "apiKeyAuthentication", "versions": [1] }
             ]
         }),
     ))
