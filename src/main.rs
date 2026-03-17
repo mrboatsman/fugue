@@ -482,7 +482,7 @@ async fn playlist(config: Config, action: PlaylistAction) -> anyhow::Result<()> 
             println!("Tracks will sync when connected to the creator.");
         }
         PlaylistAction::List => {
-            let playlists = collab_playlist::list_playlists(&db).await?;
+            let playlists = collab_playlist::list_playlists(&db, &config.social.display_name, &node_id).await?;
             if playlists.is_empty() {
                 println!("No collaborative playlists.");
                 println!("Create one: fugue playlist create \"My Playlist\"");

@@ -33,7 +33,8 @@ pub async fn get_playlists(
     let local = playlist_db::get_playlists_for_user(state.db(), &auth.username).await?;
 
     // Collaborative playlists
-    let collab = collab_playlist::list_playlists(state.db()).await?;
+    let node_id = state.node_id().unwrap_or_default();
+    let collab = collab_playlist::list_playlists(state.db(), &auth.username, &node_id).await?;
 
     if let Some(playlists) = merged
         .get_mut("playlists")
@@ -49,7 +50,7 @@ pub async fn get_playlists(
 
 /// Get a single playlist — local, remote, or collaborative.
 pub async fn get_playlist(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     params: SubsonicParams,
 ) -> Result<impl IntoResponse, FugueError> {
@@ -61,7 +62,8 @@ pub async fn get_playlist(
     // Check collaborative playlist
     if let Some(uuid) = collab_playlist::decode_collab_id(id) {
         debug!("getPlaylist id={} -> collab uuid={}", id, uuid);
-        match collab_playlist::get_playlist(state.db(), &uuid).await? {
+        let node_id = state.node_id().unwrap_or_default();
+        match collab_playlist::get_playlist(state.db(), &uuid, &auth.username, &node_id).await? {
             Some(playlist) => return Ok(SubsonicResponse::ok(params.format, playlist)),
             None => return Err(FugueError::NotFound("Playlist not found".into())),
         }

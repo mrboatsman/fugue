@@ -180,8 +180,9 @@ pub async fn delete_playlist(db: &SqlitePool, playlist_id: &str) -> Result<(), F
     Ok(())
 }
 
-/// Get all collaborative playlists.
-pub async fn list_playlists(db: &SqlitePool) -> Result<Vec<serde_json::Value>, FugueError> {
+/// Get all collaborative playlists. Sets `owner` to `username` for playlists
+/// the user can edit, so Subsonic clients allow adding songs.
+pub async fn list_playlists(db: &SqlitePool, username: &str, node_id: &str) -> Result<Vec<serde_json::Value>, FugueError> {
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT id, name, created_by, created_at FROM collab_playlists ORDER BY name",
     )
@@ -207,12 +208,18 @@ pub async fn list_playlists(db: &SqlitePool) -> Result<Vec<serde_json::Value>, F
         // Encode as collab playlist ID: "c:{uuid}"
         let encoded_id = encode_collab_id(&id);
 
+        // Check if the current user can edit this playlist.
+        // If so, set owner to their username so clients allow editing.
+        let can_edit = can_edit(db, &id, node_id).await.unwrap_or(false)
+            || created_by == node_id;
+        let display_owner = if can_edit { username } else { &created_by };
+
         playlists.push(serde_json::json!({
             "id": encoded_id,
             "name": format!("[Collab] {}", name),
             "comment": format!("Collaborative playlist (created by {})", created_by),
             "public": true,
-            "owner": created_by,
+            "owner": display_owner,
             "songCount": track_count.0,
             "duration": duration.0.unwrap_or(0),
             "created": to_iso8601(&created_at),
@@ -227,6 +234,8 @@ pub async fn list_playlists(db: &SqlitePool) -> Result<Vec<serde_json::Value>, F
 pub async fn get_playlist(
     db: &SqlitePool,
     playlist_id: &str,
+    username: &str,
+    node_id: &str,
 ) -> Result<Option<serde_json::Value>, FugueError> {
     let row: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT id, name, created_by, created_at FROM collab_playlists WHERE id = ?",
@@ -267,6 +276,9 @@ pub async fn get_playlist(
         .collect();
 
     let encoded_id = encode_collab_id(&id);
+    let user_can_edit = can_edit(db, playlist_id, node_id).await.unwrap_or(false)
+        || created_by == node_id;
+    let display_owner = if user_can_edit { username } else { &created_by };
 
     Ok(Some(serde_json::json!({
         "playlist": {
@@ -274,7 +286,7 @@ pub async fn get_playlist(
             "name": format!("[Collab] {}", name),
             "comment": format!("Collaborative playlist (created by {})", created_by),
             "public": true,
-            "owner": created_by,
+            "owner": display_owner,
             "songCount": entries.len(),
             "duration": tracks.iter().filter_map(|t| t.5).sum::<i64>(),
             "created": to_iso8601(&created_at),
