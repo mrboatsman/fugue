@@ -124,11 +124,92 @@ pub async fn get_now_playing(
     params: SubsonicParams,
 ) -> Result<impl IntoResponse, FugueError> {
     debug!("getNowPlaying");
-    let entries = crate::social::activity::get_now_playing(state.db()).await?;
+    let mut entries = crate::social::activity::get_now_playing(state.db()).await?;
+
+    // Enrich with playback position from reports
+    for entry in &mut entries {
+        if let Some(media_id) = entry.get("id").and_then(|i| i.as_str()) {
+            let node_id = entry.get("nodeId").and_then(|n| n.as_str()).unwrap_or("");
+            let user = entry.get("username").and_then(|u| u.as_str()).unwrap_or("");
+            let report: Option<(i64, String)> = sqlx::query_as(
+                "SELECT position_ms, state FROM playback_reports
+                 WHERE node_id = ? AND user_name = ? AND media_id = ?",
+            )
+            .bind(node_id)
+            .bind(user)
+            .bind(media_id)
+            .fetch_optional(state.db())
+            .await
+            .unwrap_or(None);
+
+            if let Some((pos, play_state)) = report {
+                if let Some(obj) = entry.as_object_mut() {
+                    obj.insert("playerPosition".into(), json!(pos));
+                    obj.insert("playbackState".into(), json!(play_state));
+                }
+            }
+        }
+    }
+
     Ok(SubsonicResponse::ok(
         params.format,
         json!({ "nowPlaying": { "entry": entries } }),
     ))
+}
+
+pub async fn report_playback(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    params: SubsonicParams,
+) -> Result<impl IntoResponse, FugueError> {
+    let media_id = params.raw.get("mediaId").or(params.raw.get("id"))
+        .ok_or_else(|| FugueError::missing("mediaId"))?;
+    let position_ms: i64 = params.raw.get("positionMs")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let play_state = params.raw.get("state").cloned().unwrap_or_else(|| "playing".into());
+    let ignore_scrobble = params.raw.get("ignoreScrobble")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    debug!("reportPlayback user={} media={} pos={}ms state={}", auth.username, media_id, position_ms, play_state);
+
+    let node_id = state.node_id().unwrap_or_else(|| "local".into());
+
+    sqlx::query(
+        "INSERT INTO playback_reports (user_name, node_id, media_id, position_ms, state, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(node_id, user_name, media_id) DO UPDATE SET
+           position_ms = excluded.position_ms, state = excluded.state, updated_at = excluded.updated_at",
+    )
+    .bind(&auth.username)
+    .bind(&node_id)
+    .bind(media_id)
+    .bind(position_ms)
+    .bind(&play_state)
+    .execute(state.db())
+    .await?;
+
+    // Broadcast to friends if social is enabled and not just a position update
+    if !ignore_scrobble {
+        if let Some(social) = state.social() {
+            // Resolve track metadata for the now playing broadcast
+            if let Ok((backend, original_id)) = crate::proxy::router::route_to_backend(&state, media_id) {
+                if let Ok(mut resp) = backend.request_json("getSong", &[("id", &original_id)]).await {
+                    resp.namespace_ids(backend.index);
+                    if let Some(song) = resp.get("song") {
+                        let mut track = song.clone();
+                        if let Some(obj) = track.as_object_mut() {
+                            obj.insert("playerPosition".into(), json!(position_ms));
+                        }
+                        social.broadcast_now_playing(&track).await;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(SubsonicResponse::empty(params.format))
 }
 
 pub async fn get_bookmarks(

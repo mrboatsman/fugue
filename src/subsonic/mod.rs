@@ -78,6 +78,7 @@ pub fn router() -> Router<AppState> {
     let r = subsonic_route!(r, "getPlayQueue", extras::get_play_queue);
     let r = subsonic_route!(r, "savePlayQueue", extras::save_play_queue);
     let r = subsonic_route!(r, "getInternetRadioStations", extras::get_internet_radio_stations);
+    let r = subsonic_route!(r, "reportPlayback", extras::report_playback);
     let r = subsonic_route!(r, "getLyrics", extras::get_lyrics);
     let r = subsonic_route!(r, "getLyricsBySongId", extras::get_lyrics_by_song_id);
     let r = subsonic_route!(r, "getAlbumInfo", extras::get_album_info);
