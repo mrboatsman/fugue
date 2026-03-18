@@ -15,7 +15,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Only run if triggered by push to main, or if Release workflow succeeded
+    # Run on push to main (dev tag), or when Release workflow succeeded (release tags)
     if: >
       github.event_name == 'push' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
@@ -34,20 +34,21 @@ jobs:
         id: build_type
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "Triggered by Release workflow — will tag as release"
+            # Only treat as release if release-plz actually created a version tag on HEAD
+            TAG=$(git tag --points-at HEAD | grep '^v' | head -1)
+            if [ -n "$TAG" ]; then
+              VERSION="${TAG#v}"
+              echo "is_release=true" >> "$GITHUB_OUTPUT"
+              echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+              echo "Release tag found: $TAG (version $VERSION)"
+            else
+              echo "is_release=false" >> "$GITHUB_OUTPUT"
+              echo "No release tag on HEAD — skipping release build"
+            fi
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "Triggered by push — dev only"
           fi
-
-      - name: Extract version from Cargo.toml
-        if: steps.build_type.outputs.is_release == 'true'
-        id: cargo_version
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Cargo version: $VERSION"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -66,7 +67,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=dev
-            type=raw,value=${{ steps.cargo_version.outputs.version }},enable=${{ steps.build_type.outputs.is_release == 'true' }}
+            type=raw,value=${{ steps.build_type.outputs.version }},enable=${{ steps.build_type.outputs.is_release == 'true' }}
             type=raw,value=latest,enable=${{ steps.build_type.outputs.is_release == 'true' }}
 
       - name: Build and push
