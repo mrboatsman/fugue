@@ -1,3 +1,46 @@
+//! Subsonic API endpoint layer.
+//!
+//! This module implements the full set of Subsonic (and OpenSubsonic) REST
+//! endpoints that Fugue exposes to clients. Every endpoint is registered at
+//! both `/rest/<name>` and `/rest/<name>.view` to match client expectations.
+//!
+//! # Request Handling
+//!
+//! Subsonic clients vary in how they send requests:
+//! - Some use **GET** with query parameters, others use **POST** with a
+//!   form-urlencoded body
+//! - Some use the `.view` suffix on endpoint paths, others don't
+//!
+//! The [`params`] middleware normalizes this by merging POST body parameters
+//! into the query string, so handlers always read from query params regardless
+//! of the client's request method.
+//!
+//! # Authentication
+//!
+//! All endpoints (except `/admin/*`) are authenticated via the
+//! [`auth::AuthenticatedUser`] extractor, which supports three methods:
+//!
+//! 1. **Token + salt** (preferred) — `u`, `t`, `s` params; token = MD5(password + salt)
+//! 2. **Plaintext password** — `u`, `p` params; password may be hex-encoded
+//!    with `enc:` prefix
+//! 3. **API key** — `apiKey` param; SHA-256 hashed and matched against stored
+//!    keys in the database (OpenSubsonic `apiKeyAuthentication` extension)
+//!
+//! Fugue authenticates clients against its own user list (`[auth.users]` in
+//! config), then authenticates to each backend independently using the
+//! backend's stored credentials.
+//!
+//! # Response Formats
+//!
+//! Responses are returned in either XML or JSON based on the `f` query param
+//! (default: XML). The [`response`] module handles format negotiation and
+//! wrapping in the standard `<subsonic-response>` envelope.
+//!
+//! # Admin Endpoints
+//!
+//! A handful of internal endpoints (`/admin/sync`, `/admin/ticket`,
+//! `/admin/status`, etc.) are used by the CLI and are not authenticated.
+
 use axum::{middleware, routing::any, routing::post, Router};
 
 use crate::state::AppState;

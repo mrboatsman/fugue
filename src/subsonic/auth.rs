@@ -1,3 +1,24 @@
+//! Subsonic authentication mechanisms.
+//!
+//! Fugue supports three authentication methods, checked in this order:
+//!
+//! 1. **API key** (`apiKey` param) — OpenSubsonic `apiKeyAuthentication`
+//!    extension. The key is SHA-256 hashed and looked up in the `api_keys`
+//!    table. Keys are created via `fugue api-key create` and only the hash
+//!    is stored; the plaintext is shown once at creation time.
+//!
+//! 2. **Token + salt** (`u`, `t`, `s` params) — standard Subsonic auth.
+//!    The client computes `t = MD5(password + s)` and sends it with a random
+//!    salt. Fugue recomputes the hash server-side to verify.
+//!
+//! 3. **Plaintext password** (`u`, `p` params) — the password is sent
+//!    directly (or hex-encoded with an `enc:` prefix). Least secure, but
+//!    some older clients only support this.
+//!
+//! Authentication is implemented as an axum [`FromRequestParts`] extractor
+//! ([`AuthenticatedUser`]), so adding it to a handler signature is enough
+//! to require auth.
+
 use axum::extract::{FromRequestParts, Query};
 use axum::http::request::Parts;
 use md5::{Digest, Md5};

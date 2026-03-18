@@ -1,3 +1,22 @@
+//! # Fugue
+//!
+//! A smart Subsonic API proxy that merges multiple Navidrome instances into
+//! one unified music library.
+//!
+//! ## Architecture
+//!
+//! Fugue sits between Subsonic clients and one or more Navidrome backends:
+//!
+//! - **[`proxy`]** — fan-out requests to all backends, merge responses, proxy streams
+//! - **[`id`]** — opaque ID namespacing so backend IDs never collide
+//! - **[`cache`]** — background crawl + SQLite cache for instant browsing/search
+//! - **[`dedup`]** — cross-backend deduplication via metadata fingerprinting
+//! - **[`social`]** — optional P2P layer (Iroh) for sharing with friends
+//! - **[`config`]** — TOML + env var configuration
+//! - **[`subsonic`]** — Subsonic API endpoint handlers and auth
+//!
+//! Run `cargo doc --no-deps --open` to browse full module documentation.
+
 // Many fields, variants, and functions are defined now but only used in later phases
 // (caching, dedup, smart routing). Suppress until those phases are implemented.
 #![allow(dead_code)]

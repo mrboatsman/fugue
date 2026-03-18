@@ -1,0 +1,131 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build docs
+        run: cargo doc --no-deps --document-private-items
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "slug=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "slug=dev" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore previous versions
+        run: |
+          git fetch origin gh-pages || true
+          mkdir -p _site
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git worktree add gh-pages-wt origin/gh-pages
+            cp -r gh-pages-wt/* _site/ 2>/dev/null || true
+            git worktree remove gh-pages-wt
+          fi
+
+      - name: Copy new docs into version slot
+        run: |
+          rm -rf "_site/${{ steps.version.outputs.slug }}"
+          cp -r target/doc "_site/${{ steps.version.outputs.slug }}"
+
+      - name: Update latest symlink on release
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          rm -rf _site/latest
+          cp -r target/doc _site/latest
+
+      - name: Generate index page
+        run: |
+          cat > _site/index.html << 'HEREDOC'
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>fugue docs</title>
+          <style>
+            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; }
+            a { display: block; padding: 0.5rem 0; }
+          </style>
+          </head>
+          <body>
+          <h1>fugue documentation</h1>
+          <div id="versions"></div>
+          <script>
+          HEREDOC
+
+          # Build version list from directories
+          echo "const versions = [" >> _site/index.html
+          for dir in _site/*/; do
+            name=$(basename "$dir")
+            echo "  '$name'," >> _site/index.html
+          done
+          echo "];" >> _site/index.html
+
+          cat >> _site/index.html << 'HEREDOC'
+          const container = document.getElementById('versions');
+          const order = ['latest', 'dev'];
+          versions.sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai !== -1 && bi !== -1) return ai - bi;
+            if (ai !== -1) return -1;
+            if (bi !== -1) return -1;
+            return b.localeCompare(a, undefined, { numeric: true });
+          });
+          versions.forEach(v => {
+            const a = document.createElement('a');
+            a.href = v + '/fugue/index.html';
+            a.textContent = v;
+            container.appendChild(a);
+          });
+          </script>
+          </body>
+          </html>
+          HEREDOC
+
+      - name: Save to gh-pages branch
+        run: |
+          cd _site
+          git init
+          git checkout -b gh-pages
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: update ${{ steps.version.outputs.slug }}"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

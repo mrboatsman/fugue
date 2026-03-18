@@ -1,3 +1,34 @@
+//! ID namespacing for multi-backend routing.
+//!
+//! Every item in the Subsonic API has an ID (artists, albums, songs, cover art).
+//! Since Fugue merges multiple backends, raw IDs would collide — two backends
+//! could both have a song with ID `"42"`.
+//!
+//! # Encoding Scheme
+//!
+//! Fugue wraps every ID in a base64url-encoded token:
+//!
+//! ```text
+//! encode_id(backend_idx, original_id)
+//!   → base64url("{backend_idx}:{original_id}")
+//!   → e.g. "Mjo0Mg" for backend 2, song "42"
+//! ```
+//!
+//! When a client sends this ID back, [`decode_id`] extracts the backend index
+//! and original ID so Fugue knows which backend to route the request to.
+//!
+//! # Dedup IDs
+//!
+//! Deduplicated items use a separate prefix (`d:`) so they can be distinguished
+//! from regular backend IDs. A dedup ID encodes a fingerprint hash instead of
+//! a backend index — the dedup resolver then picks the best concrete source
+//! at request time.
+//!
+//! ```text
+//! encode_dedup_id(fingerprint_hash)
+//!   → base64url("d:{fingerprint_hash}")
+//! ```
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 

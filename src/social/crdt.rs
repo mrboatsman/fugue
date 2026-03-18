@@ -5,8 +5,44 @@
 //! - Each add/remove carries a unique tag (node_id + lamport timestamp)
 //! - Merge: union of all adds, minus all removes. Add wins over concurrent remove.
 //!
-//! Sync protocol: nodes exchange their full operation log. Operations are
-//! idempotent — replaying the same op twice has no effect.
+//! # Operation Log
+//!
+//! Every change to a collaborative playlist is stored as an operation in `crdt_ops`:
+//! - **AddTrack** — adds a track with metadata
+//! - **RemoveTrack** — removes a track
+//! - **SetName** — renames the playlist
+//!
+//! Each operation has a unique `op_id` (`{node_id}:{lamport_timestamp}`) so
+//! duplicates are safely ignored.
+//!
+//! # Materialized View
+//!
+//! After operations are stored, [`rebuild_playlist`] replays all ops in timestamp
+//! order to compute the current track list. This materialized view is what
+//! `getPlaylist` serves to clients.
+//!
+//! # Sync Protocol
+//!
+//! - When any change happens, the new CRDT ops are broadcast via gossip
+//! - When a peer connects (`NeighborUp`), ALL ops for all playlists are broadcast
+//! - [`merge_ops`] is idempotent — the same op arriving twice is ignored
+//!   (`INSERT OR IGNORE` by `op_id`)
+//! - After merging, the materialized view is rebuilt
+//!
+//! # Offline Resilience
+//!
+//! ```text
+//! Node A adds track X (offline)     Node B adds track Y (offline)
+//!   op: A:1 AddTrack(X)               op: B:1 AddTrack(Y)
+//!                   \                 /
+//!                    --- reconnect ---
+//!                   /                 \
+//!   receives B:1, merges              receives A:1, merges
+//!   rebuild: [X, Y]                   rebuild: [X, Y]
+//!   ✓ both converge                   ✓ both converge
+//! ```
+//!
+//! Both nodes end up with the same playlist — no data loss, no conflicts.
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;

@@ -1,3 +1,12 @@
+//! Shared application state.
+//!
+//! [`AppState`] is the central struct passed to all axum handlers via
+//! `State<AppState>`. It holds references to the config, backend clients,
+//! SQLite pool, health registry, and optional social/Iroh components.
+//!
+//! The inner data is wrapped in `Arc` so cloning `AppState` is cheap
+//! (just a reference count bump).
+
 use std::sync::Arc;
 
 use iroh::Endpoint;

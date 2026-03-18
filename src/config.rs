@@ -1,3 +1,19 @@
+//! Application configuration.
+//!
+//! Configuration is loaded from a TOML file (default: `fugue.toml`) using
+//! [figment](https://docs.rs/figment). Every setting can be overridden via
+//! environment variables with the `FUGUE_` prefix, where nested keys use
+//! underscores as separators:
+//!
+//! ```text
+//! server.port       → FUGUE_SERVER_PORT
+//! cache.db_path     → FUGUE_CACHE_DB_PATH
+//! social.enabled    → FUGUE_SOCIAL_ENABLED
+//! ```
+//!
+//! Environment variables take precedence over the TOML file. See
+//! [`Config::load`] for the merge order.
+
 use figment::{
     providers::{Env, Format, Toml},
     Figment,
