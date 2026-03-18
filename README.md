@@ -1,7 +1,11 @@
+[![Vibe Coded](https://img.shields.io/badge/✨-vibe_coded-blueviolet)](https://github.com/mrboatsman/fugue)
+
 DISCLAIMER: This is a vibe coded project I take no pride in this,
 it just solved an issue for me
 
 # Fugue
+
+[![Dev Docs](https://img.shields.io/badge/docs-dev-orange?style=for-the-badge&logo=readthedocs)](https://mrboatsman.github.io/fugue/dev/fugue/index.html)
 
 A smart Subsonic API proxy that merges multiple Navidrome instances into one
 unified music library. Connect any Subsonic-compatible client to Fugue and
@@ -41,7 +45,7 @@ routing, and local state.
 - **Proxy-local favorites** — stars stored locally, consistent across all backends
 - **Background caching** — browsing and search served from SQLite cache
 - **Stream proxying** — zero-buffer passthrough from correct backend to client
-- **P2P social** — optional Iroh-based layer for sharing libraries with friends
+- **P2P social** — optional Iroh-based layer for sharing playlists with proxy friends
 - **Collaborative playlists** — CRDT-based playlists that sync across peers
 - **Client compatibility** — GET/POST, XML/JSON, `.view` paths, token+salt and plaintext auth
 
@@ -110,7 +114,10 @@ Or standalone Docker:
 
 ```bash
 touch fugue.db
-docker run -d -p 4533:4533 -v ./fugue.toml:/etc/fugue/fugue.toml:ro -v ./ ghcr.io/mrboatsman/fugue:latest
+docker run -d -p 4533:4533 \
+   -v ./fugue.toml:/etc/fugue/fugue.toml:ro \
+   -v ./fugue.db:fugue.db \
+   ghcr.io/mrboatsman/fugue:latest
 ```
 
 ### Connect a Client
