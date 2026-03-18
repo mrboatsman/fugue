@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/mrboatsman/fugue/compare/v0.1.2...v0.1.3) - 2026-03-18
+
+### Added
+
+- OpenSubsonic apiKeyAuthentication extension
+- declare OpenSubsonic transcodeOffset & transcodeOffset extension
+- Add OpenSubsonic Extension
+- adaptive bitrate for P2P streaming
+- P2P social layer with Iroh, collaborative playlists with CRDT sync
+- incremental cache sync with change detection
+
+### Fixed
+
+- only tag Docker image as latest/version on actual releases
+- only tag Docker image as latest/version on release workflow
+- collab playlist ownership
+- CRDT sync reliability and cover art streaming from friends
+- fetch tags in Docker workflow to detect releases
+
+### Other
+
+- correcting README and clearify parts
+- add rustdoc comments and GitHub Pages publishing workflow
+
 ## [0.1.2](https://github.com/mrboatsman/fugue/compare/v0.1.1...v0.1.2) - 2026-03-15
 
 ### Fixed
