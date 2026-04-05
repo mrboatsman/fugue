@@ -25,11 +25,16 @@ fn fugue_topic() -> TopicId {
 }
 
 /// Start the social P2P service.
+///
+/// `subsonic_router` is the fully-built axum router (with state applied) used
+/// to handle Subsonic-over-Iroh requests. It is `None` when the caller only
+/// wants the social/gossip features without the Subsonic bridge.
 pub async fn start(
     endpoint: Endpoint,
     db: SqlitePool,
     display_name: String,
     backends: Vec<BackendClient>,
+    subsonic_router: Option<axum::Router>,
 ) -> Result<SocialHandle, Box<dyn std::error::Error + Send + Sync>> {
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
@@ -158,6 +163,7 @@ pub async fn start(
     let backends_arc = Arc::new(backends);
     let endpoint_clone = endpoint.clone();
     let gossip_clone = gossip.clone();
+    let router_clone = subsonic_router;
     tokio::spawn(async move {
         loop {
             match endpoint_clone.accept().await {
@@ -165,6 +171,7 @@ pub async fn start(
                     let db = db_clone2.clone();
                     let gossip = gossip_clone.clone();
                     let backends = backends_arc.clone();
+                    let router = router_clone.clone();
                     tokio::spawn(async move {
                         match incoming.await {
                             Ok(conn) => {
@@ -178,6 +185,26 @@ pub async fn start(
                                     debug!("social: incoming fugue connection");
                                     if let Err(e) = handle_connection(conn, &db, &backends).await {
                                         debug!("social: fugue connection error: {}", e);
+                                    }
+                                } else if alpn == crate::social::node::SUBSONIC_ALPN {
+                                    debug!("social: incoming subsonic-over-iroh connection");
+                                    if let Some(router) = router {
+                                        // Long-lived connection: accept multiple bi-streams
+                                        loop {
+                                            match conn.accept_bi().await {
+                                                Ok((send, recv)) => {
+                                                    let r = router.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = crate::social::subsonic_bridge::handle_stream(send, recv, r).await {
+                                                            debug!("subsonic-over-iroh stream error: {e}");
+                                                        }
+                                                    });
+                                                }
+                                                Err(_) => break,
+                                            }
+                                        }
+                                    } else {
+                                        debug!("social: subsonic bridge not configured, dropping connection");
                                     }
                                 } else {
                                     debug!("social: unknown ALPN: {:?}", String::from_utf8_lossy(&alpn));

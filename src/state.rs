@@ -7,7 +7,7 @@
 //! The inner data is wrapped in `Arc` so cloning `AppState` is cheap
 //! (just a reference count bump).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use iroh::Endpoint;
 use sqlx::SqlitePool;
@@ -28,8 +28,8 @@ pub struct AppStateInner {
     pub backends: Vec<BackendClient>,
     pub db: SqlitePool,
     pub health: HealthRegistry,
-    pub iroh: Option<Endpoint>,
-    pub social: Option<SocialHandle>,
+    pub iroh: OnceLock<Endpoint>,
+    pub social: OnceLock<SocialHandle>,
     pub bandwidth: BandwidthTracker,
 }
 
@@ -46,32 +46,21 @@ impl AppState {
                 backends,
                 db,
                 health,
-                iroh: None,
-                social: None,
+                iroh: OnceLock::new(),
+                social: OnceLock::new(),
                 bandwidth: BandwidthTracker::new(),
             }),
         }
     }
 
-    pub fn with_social(
-        config: Config,
-        backends: Vec<BackendClient>,
-        db: SqlitePool,
-        health: HealthRegistry,
-        endpoint: Endpoint,
-        social_handle: SocialHandle,
-    ) -> Self {
-        Self {
-            inner: Arc::new(AppStateInner {
-                config,
-                backends,
-                db,
-                health,
-                iroh: Some(endpoint),
-                social: Some(social_handle),
-                bandwidth: BandwidthTracker::new(),
-            }),
-        }
+    /// Set the Iroh endpoint after construction (called when social is enabled).
+    pub fn set_iroh(&self, endpoint: Endpoint) {
+        let _ = self.inner.iroh.set(endpoint);
+    }
+
+    /// Set the social handle after construction (called when social is enabled).
+    pub fn set_social(&self, handle: SocialHandle) {
+        let _ = self.inner.social.set(handle);
     }
 
     pub fn backends(&self) -> &[BackendClient] {
@@ -95,11 +84,11 @@ impl AppState {
     }
 
     pub fn iroh(&self) -> Option<&Endpoint> {
-        self.inner.iroh.as_ref()
+        self.inner.iroh.get()
     }
 
     pub fn social(&self) -> Option<&SocialHandle> {
-        self.inner.social.as_ref()
+        self.inner.social.get()
     }
 
     pub fn bandwidth(&self) -> &BandwidthTracker {
@@ -107,6 +96,6 @@ impl AppState {
     }
 
     pub fn node_id(&self) -> Option<String> {
-        self.inner.iroh.as_ref().map(|e| e.id().to_string())
+        self.inner.iroh.get().map(|e| e.id().to_string())
     }
 }

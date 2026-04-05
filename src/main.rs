@@ -249,8 +249,14 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let db = init_db(&config).await?;
     let health_registry = health::probe::HealthRegistry::new();
 
+    // Build state without social handle first — handlers check social() for None
+    let state = AppState::new(config.clone(), backends.clone(), db.clone(), health_registry.clone());
+
+    // Build the axum router (with state applied) — shared by HTTP and Iroh transport
+    let router = subsonic::router().with_state(state.clone());
+
     // Initialize Iroh social layer if enabled
-    let state = if config.social.enabled {
+    if config.social.enabled {
         let secret_key = social::node::load_or_create_secret_key(&db).await?;
         let endpoint = social::node::create_endpoint(secret_key).await?;
         info!(
@@ -259,36 +265,31 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             config.social.display_name
         );
 
-        let social_handle = social::service::start(
+        // Store Iroh endpoint in state
+        state.set_iroh(endpoint.clone());
+
+        let _social_handle = social::service::start(
             endpoint.clone(),
             db.clone(),
             config.social.display_name.clone(),
             backends.clone(),
+            Some(router.clone()),
         )
         .await
         .map_err(|e| anyhow::anyhow!("Failed to start social service: {e}"))?;
+
+        state.set_social(_social_handle);
 
         // Log ticket after a delay so relay is discovered
         let ep_clone = endpoint.clone();
         let display_name = config.social.display_name.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let ticket = social::node::generate_ticket(&ep_clone);
+            let ticket = social::node::generate_ticket(&ep_clone, Some(&display_name));
             info!("Social ticket (share with friends):");
-            info!("  fugue friend add --name \"{}\" {}", display_name, ticket);
+            info!("  {ticket}");
         });
-
-        AppState::with_social(
-            config.clone(),
-            backends.clone(),
-            db.clone(),
-            health_registry.clone(),
-            endpoint,
-            social_handle,
-        )
-    } else {
-        AppState::new(config.clone(), backends.clone(), db.clone(), health_registry.clone())
-    };
+    }
 
     // Spawn background health probes (every 30s)
     health::probe::spawn_health_probe(health_registry, backends.clone(), 30);
@@ -300,14 +301,11 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         config.cache.refresh_interval_secs,
     );
 
-    let app = subsonic::router()
-        .with_state(state);
-
     let addr = format!("{}:{}", config.server.host, config.server.port);
     info!("Fugue listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, router).await?;
 
     Ok(())
 }

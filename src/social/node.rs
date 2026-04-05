@@ -10,6 +10,9 @@ use crate::error::FugueError;
 /// The ALPN protocol identifier for Fugue direct requests.
 pub const FUGUE_ALPN: &[u8] = b"fugue/social/0";
 
+/// The ALPN protocol identifier for Subsonic API over Iroh QUIC.
+pub const SUBSONIC_ALPN: &[u8] = b"fugue/subsonic/0";
+
 /// Re-export the gossip ALPN so we can register it on the endpoint.
 pub const GOSSIP_ALPN: &[u8] = iroh_gossip::net::GOSSIP_ALPN;
 
@@ -45,7 +48,7 @@ pub async fn load_or_create_secret_key(db: &SqlitePool) -> Result<SecretKey, Fug
 pub async fn create_endpoint(secret_key: SecretKey) -> Result<Endpoint, FugueError> {
     let endpoint = Endpoint::builder()
         .secret_key(secret_key)
-        .alpns(vec![FUGUE_ALPN.to_vec(), GOSSIP_ALPN.to_vec()])
+        .alpns(vec![FUGUE_ALPN.to_vec(), GOSSIP_ALPN.to_vec(), SUBSONIC_ALPN.to_vec()])
         .bind()
         .await
         .map_err(|e| FugueError::Internal(format!("Failed to create Iroh endpoint: {e}")))?;
@@ -57,11 +60,16 @@ pub async fn create_endpoint(secret_key: SecretKey) -> Result<Endpoint, FugueErr
 
 /// Generate a ticket string containing the full endpoint address
 /// (node ID + relay URL + direct addresses).
-pub fn generate_ticket(endpoint: &Endpoint) -> String {
+/// Returns `"display_name:base64_ticket"` when a display name is provided.
+pub fn generate_ticket(endpoint: &Endpoint, display_name: Option<&str>) -> String {
     let addr = endpoint.addr();
     let json = serde_json::to_string(&addr).unwrap_or_default();
     use base64::Engine;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes())
+    let ticket = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+    match display_name {
+        Some(name) => format!("{name}:{ticket}"),
+        None => ticket,
+    }
 }
 
 /// Parse a ticket string back into an EndpointAddr.
@@ -75,4 +83,17 @@ pub fn parse_ticket(ticket: &str) -> Result<EndpointAddr, FugueError> {
     let addr: EndpointAddr = serde_json::from_str(&json)
         .map_err(|e| FugueError::Internal(format!("Invalid ticket format: {e}")))?;
     Ok(addr)
+}
+
+/// Parse a named ticket string `"friendly_name:base64_ticket"` into (name, EndpointAddr).
+/// Falls back to parsing the entire string as a plain ticket with an empty name.
+pub fn parse_named_ticket(input: &str) -> Result<(String, EndpointAddr), FugueError> {
+    if let Some((name, ticket_part)) = input.split_once(':') {
+        match parse_ticket(ticket_part) {
+            Ok(addr) => return Ok((name.to_string(), addr)),
+            Err(_) => {} // fall through to try parsing the whole string
+        }
+    }
+    let addr = parse_ticket(input)?;
+    Ok((String::new(), addr))
 }

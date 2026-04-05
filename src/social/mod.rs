@@ -53,3 +53,4 @@ pub mod service;
 pub mod bandwidth;
 pub mod collab_playlist;
 pub mod crdt;
+pub mod subsonic_bridge;

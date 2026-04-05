@@ -93,7 +93,8 @@ pub async fn admin_ticket(
 ) -> impl IntoResponse {
     match state.iroh() {
         Some(endpoint) => {
-            let ticket = crate::social::node::generate_ticket(endpoint);
+            let display_name = state.config().social.display_name.as_str();
+            let ticket = crate::social::node::generate_ticket(endpoint, Some(display_name));
             let node_id = endpoint.id().to_string();
             axum::Json(serde_json::json!({
                 "ticket": ticket,
