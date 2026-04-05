@@ -3,10 +3,9 @@ name: Build and publish Docker image
 on:
   push:
     branches: [main]
-  # Trigger when Release workflow completes (after it creates a tag)
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
+  # Trigger when release-plz creates a GitHub Release
+  release:
+    types: [published]
 
 env:
   REGISTRY: ghcr.io
@@ -15,10 +14,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Run on push to main (dev tag), or when Release workflow succeeded (release tags)
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    # Run on push to main (dev tag) or when a release is published (release tags)
+    if: github.event_name == 'push' || github.event_name == 'release'
     permissions:
       contents: read
       packages: write
@@ -27,24 +24,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          fetch-tags: true
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
 
       - name: Determine if this is a release build
         id: build_type
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            # Only treat as release if release-plz actually created a version tag on HEAD
-            TAG=$(git tag --points-at HEAD | grep '^v' | head -1)
-            if [ -n "$TAG" ]; then
-              VERSION="${TAG#v}"
-              echo "is_release=true" >> "$GITHUB_OUTPUT"
-              echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-              echo "Release tag found: $TAG (version $VERSION)"
-            else
-              echo "is_release=false" >> "$GITHUB_OUTPUT"
-              echo "No release tag on HEAD — skipping release build"
-            fi
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Release build: $TAG (version $VERSION)"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "Triggered by push — dev only"
