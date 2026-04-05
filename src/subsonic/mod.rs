@@ -136,6 +136,12 @@ pub fn router() -> Router<AppState> {
     let r = r.route("/admin/status", any(system::admin_status));
     let r = r.route("/admin/refresh-friends", post(system::admin_refresh_friends));
     let r = r.route("/admin/playlist-sync", any(system::admin_playlist_sync));
+    let r = r.route("/admin/playlist-join", any(system::admin_playlist_join));
+    let r = r.route("/admin/playlist-invite", any(system::admin_playlist_invite));
+    let r = r.route("/admin/friend-code", any(system::admin_friend_code));
+    let r = r.route("/admin/friend-add", any(system::admin_friend_add));
+    let r = r.route("/admin/friends", any(system::admin_friends));
+    let r = r.route("/admin/activity", any(system::admin_activity));
     // Catch-all for unknown /rest/ endpoints — log and return proper Subsonic error
     let r = r.fallback(fallback_handler);
     r.layer(middleware::from_fn(params::merge_post_form_params))

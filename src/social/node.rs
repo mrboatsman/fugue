@@ -73,16 +73,29 @@ pub fn generate_ticket(endpoint: &Endpoint, display_name: Option<&str>) -> Strin
 }
 
 /// Parse a ticket string back into an EndpointAddr.
+/// Handles both plain base64 tickets and named `"name:base64"` format.
 pub fn parse_ticket(ticket: &str) -> Result<EndpointAddr, FugueError> {
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(ticket)
-        .map_err(|e| FugueError::Internal(format!("Invalid ticket encoding: {e}")))?;
-    let json = String::from_utf8(bytes)
-        .map_err(|e| FugueError::Internal(format!("Invalid ticket UTF-8: {e}")))?;
-    let addr: EndpointAddr = serde_json::from_str(&json)
-        .map_err(|e| FugueError::Internal(format!("Invalid ticket format: {e}")))?;
-    Ok(addr)
+    // Try plain base64 first
+    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(ticket) {
+        if let Ok(json) = String::from_utf8(bytes) {
+            if let Ok(addr) = serde_json::from_str::<EndpointAddr>(&json) {
+                return Ok(addr);
+            }
+        }
+    }
+    // Try "name:base64" format — strip everything before the first ':'
+    if let Some((_name, ticket_part)) = ticket.split_once(':') {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(ticket_part)
+            .map_err(|e| FugueError::Internal(format!("Invalid ticket encoding: {e}")))?;
+        let json = String::from_utf8(bytes)
+            .map_err(|e| FugueError::Internal(format!("Invalid ticket UTF-8: {e}")))?;
+        let addr: EndpointAddr = serde_json::from_str(&json)
+            .map_err(|e| FugueError::Internal(format!("Invalid ticket format: {e}")))?;
+        return Ok(addr);
+    }
+    Err(FugueError::Internal("Cannot parse ticket".into()))
 }
 
 /// Parse a named ticket string `"friendly_name:base64_ticket"` into (name, EndpointAddr).

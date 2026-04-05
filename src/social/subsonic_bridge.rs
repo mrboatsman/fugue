@@ -5,8 +5,8 @@
 //! constructs a synthetic HTTP request, calls the axum router as a tower
 //! Service, and streams the response back over the QUIC stream.
 //!
-//! This means **zero changes** to existing Subsonic endpoint handlers — they
-//! see the same `Request` they'd get from an HTTP client.
+//! Special case: `admin/events` opens a long-lived event stream that pushes
+//! activity updates (now playing, friend online/offline) in real time.
 
 use std::collections::HashMap;
 
@@ -39,36 +39,48 @@ fn header_to_str(val: Option<&HeaderValue>) -> Option<&str> {
     val.and_then(|v| v.to_str().ok())
 }
 
-/// Handle a single Subsonic-over-Iroh bi-stream.
-///
-/// `router` must already have state applied (i.e. `Router<()>`).
-pub async fn handle_stream(
+/// Handle a bi-stream: either a regular request/response or an event subscription.
+pub async fn handle_stream_or_events(
     mut send: SendStream,
     mut recv: RecvStream,
     router: axum::Router,
+    event_tx: tokio::sync::broadcast::Sender<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Read the request JSON (same 64KB limit as the social protocol)
     let request_bytes = recv.read_to_end(64 * 1024).await?;
     let req: SubsonicRequest = serde_json::from_slice(&request_bytes)?;
 
+    if req.endpoint == "admin/events" {
+        return handle_event_stream(send, event_tx).await;
+    }
+
+    handle_request(send, req, router).await
+}
+
+/// Handle a regular Subsonic API request/response.
+async fn handle_request(
+    mut send: SendStream,
+    req: SubsonicRequest,
+    router: axum::Router,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug!("subsonic-over-iroh: {} with {} params", req.endpoint, req.params.len());
 
-    // 2. Build query string from params
     let query_string: String = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(&req.params)
         .finish();
 
-    // 3. Construct a synthetic HTTP GET request
-    let uri = format!("/rest/{}?{}", req.endpoint, query_string);
+    let path = if req.endpoint.starts_with("admin/") {
+        format!("/{}", req.endpoint)
+    } else {
+        format!("/rest/{}", req.endpoint)
+    };
+    let uri = format!("{}?{}", path, query_string);
     let http_request = http::Request::builder()
         .method(http::Method::GET)
         .uri(&uri)
         .body(Body::empty())?;
 
-    // 4. Call the axum router as a tower Service
     let response: Response = router.oneshot(http_request).await?;
 
-    // 5. Extract response metadata
     let status = response.status().as_u16();
     let content_type = header_to_str(response.headers().get(http::header::CONTENT_TYPE))
         .unwrap_or("application/octet-stream")
@@ -76,7 +88,6 @@ pub async fn handle_stream(
     let content_length = header_to_str(response.headers().get(http::header::CONTENT_LENGTH))
         .and_then(|v| v.parse::<u64>().ok());
 
-    // 6. Write the response header JSON + newline delimiter
     let header = ResponseHeader {
         status,
         content_type,
@@ -86,7 +97,6 @@ pub async fn handle_stream(
     send.write_all(&header_bytes).await?;
     send.write_all(b"\n").await?;
 
-    // 7. Stream the response body chunk-by-chunk (no full buffering)
     let mut body = response.into_body();
     while let Some(chunk) = body.frame().await {
         match chunk {
@@ -105,8 +115,40 @@ pub async fn handle_stream(
         }
     }
 
-    // 8. Signal end of response
     send.finish()?;
+    Ok(())
+}
 
+/// Handle a long-lived event subscription stream.
+/// Pushes newline-delimited JSON events until the client disconnects.
+async fn handle_event_stream(
+    mut send: SendStream,
+    event_tx: tokio::sync::broadcast::Sender<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    debug!("subsonic-over-iroh: event subscription started");
+
+    let mut rx = event_tx.subscribe();
+
+    loop {
+        match rx.recv().await {
+            Ok(event_json) => {
+                let mut line = event_json.into_bytes();
+                line.push(b'\n');
+                if let Err(e) = send.write_all(&line).await {
+                    debug!("event stream: client disconnected: {e}");
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                debug!("event stream: lagged by {n} messages");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                debug!("event stream: channel closed");
+                break;
+            }
+        }
+    }
+
+    let _ = send.finish();
     Ok(())
 }

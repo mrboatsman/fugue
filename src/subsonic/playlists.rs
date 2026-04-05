@@ -156,11 +156,33 @@ pub async fn create_playlist(
         };
         crdt::store_op(state.db(), &playlist_id, &op).await?;
 
-        // Broadcast CRDT op
+        let mut ops_to_broadcast = vec![op];
+
+        // Add initial tracks from songId params
+        let song_ids = collect_song_ids(&params.raw);
+        for song_id in &song_ids {
+            let track = resolve_track_for_collab(&state, song_id, &node_id).await;
+            let ts = crdt::next_timestamp(state.db(), &playlist_id, &node_id).await?;
+            let op = CrdtOp {
+                op_id: format!("{}:{}", node_id, ts),
+                timestamp: ts,
+                origin_node: node_id.clone(),
+                kind: CrdtOpKind::AddTrack { track },
+            };
+            crdt::store_op(state.db(), &playlist_id, &op).await?;
+            ops_to_broadcast.push(op);
+        }
+
+        // Rebuild materialized view
+        if !song_ids.is_empty() {
+            crdt::rebuild_playlist(state.db(), &playlist_id).await?;
+        }
+
+        // Broadcast all CRDT ops
         if let Some(social) = state.social() {
             let msg = crate::social::protocol::GossipMessage::CrdtSync {
                 playlist_id: playlist_id.clone(),
-                ops: vec![op],
+                ops: ops_to_broadcast,
             };
             let sender = social.sender().await;
             let _ = sender.broadcast(msg.to_bytes()).await;
@@ -173,7 +195,7 @@ pub async fn create_playlist(
                 "playlist": {
                     "id": encoded_id,
                     "name": format!("[Collab] {}", clean_name),
-                    "songCount": 0,
+                    "songCount": song_ids.len(),
                     "duration": 0,
                     "public": true,
                     "owner": node_id,
@@ -397,6 +419,32 @@ async fn broadcast_playlist_sync(state: &AppState, playlist_id: &str) {
     }).await;
 
     debug!("broadcast FullSync for collab playlist {}", playlist_id);
+}
+
+/// Collect song IDs from params, handling both `songId` (single) and
+/// `songId[0]`, `songId[1]`, ... (indexed, used by Iroh transport).
+fn collect_song_ids(params: &std::collections::HashMap<String, String>) -> Vec<String> {
+    let mut ids = Vec::new();
+
+    // Single songId param
+    if let Some(id) = params.get("songId") {
+        ids.push(id.clone());
+    }
+
+    // Indexed songId[N] params (sorted by index)
+    let mut indexed: Vec<(usize, String)> = params
+        .iter()
+        .filter_map(|(k, v)| {
+            k.strip_prefix("songId[")
+                .and_then(|rest| rest.strip_suffix(']'))
+                .and_then(|idx| idx.parse::<usize>().ok())
+                .map(|idx| (idx, v.clone()))
+        })
+        .collect();
+    indexed.sort_by_key(|(idx, _)| *idx);
+    ids.extend(indexed.into_iter().map(|(_, v)| v));
+
+    ids
 }
 
 /// Resolve a track's metadata for inclusion in a collaborative playlist.

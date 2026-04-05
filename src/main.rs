@@ -353,12 +353,12 @@ async fn friend(config: Config, action: FriendAction) -> anyhow::Result<()> {
 
     match action {
         FriendAction::Add { name, ticket } => {
-            // Parse the ticket to extract the public key
-            let public_key = match social::node::parse_ticket(&ticket) {
-                Ok(addr) => addr.id.to_string(),
-                Err(_) => {
-                    // Fallback: treat as plain public key
-                    ticket.clone()
+            // Parse the ticket to extract the public key (handles "name:base64" format)
+            let public_key = match social::node::parse_named_ticket(&ticket) {
+                Ok((_, addr)) => addr.id.to_string(),
+                Err(_) => match social::node::parse_ticket(&ticket) {
+                    Ok(addr) => addr.id.to_string(),
+                    Err(_) => ticket.clone(),
                 }
             };
             social::friends::add_friend(&db, &name, &public_key, &ticket).await?;
@@ -525,8 +525,10 @@ async fn playlist(config: Config, action: PlaylistAction) -> anyhow::Result<()> 
             collab_playlist::create_playlist(&db, &playlist_id, &name, &node_id).await?;
             collab_playlist::add_member(&db, &playlist_id, &node_id, &config.social.display_name, Role::Owner).await?;
 
-            let collab_code = collab_playlist::generate_invite(&playlist_id, Role::Collab, &name);
-            let viewer_code = collab_playlist::generate_invite(&playlist_id, Role::Viewer, &name);
+            // CLI-generated invites don't include sender ticket (no running endpoint).
+            // Use /admin/playlist-invite from a running Fugue for self-contained invites.
+            let collab_code = collab_playlist::generate_invite(&playlist_id, Role::Collab, &name, "", "");
+            let viewer_code = collab_playlist::generate_invite(&playlist_id, Role::Viewer, &name, "", "");
 
             println!("Created collaborative playlist: {name}");
             println!("Playlist ID: {playlist_id}");
@@ -545,13 +547,14 @@ async fn playlist(config: Config, action: PlaylistAction) -> anyhow::Result<()> 
             .fetch_optional(&db)
             .await?;
             let name = name_row.map(|(n,)| n).unwrap_or_else(|| "Playlist".into());
-            let code = collab_playlist::generate_invite(&playlist_id, role, &name);
+            let code = collab_playlist::generate_invite(&playlist_id, role, &name, "", "");
             println!("Invite code ({:?}) for \"{}\":", role, name);
             println!("  fugue playlist join {code}");
         }
         PlaylistAction::Join { code } => {
-            let (playlist_id, role, name) = collab_playlist::parse_invite(&code)
+            let invite = collab_playlist::parse_invite(&code)
                 .ok_or_else(|| anyhow::anyhow!("Invalid invite code"))?;
+            let (playlist_id, role, name) = (invite.playlist_id, invite.role, invite.name);
 
             // Create or update the playlist with the name from the invite
             let exists: Option<(i64,)> = sqlx::query_as(

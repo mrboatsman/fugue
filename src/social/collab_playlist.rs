@@ -396,21 +396,118 @@ impl Role {
 }
 
 /// Generate an invite code for a playlist with a specific role.
-/// Format: base64("i:{playlist_id}:{role}:{name}")
-pub fn generate_invite(playlist_id: &str, role: Role, name: &str) -> String {
-    URL_SAFE_NO_PAD.encode(format!("i:{}:{}:{}", playlist_id, role.as_str(), name).as_bytes())
+/// Format: base64("i:{playlist_id}:{role}:{name}:{sender_name}:{sender_ticket}")
+/// The sender's name and ticket are embedded so the recipient can auto-add them
+/// as a friend without a prior ticket exchange.
+pub fn generate_invite(
+    playlist_id: &str,
+    role: Role,
+    name: &str,
+    sender_name: &str,
+    sender_ticket: &str,
+) -> String {
+    URL_SAFE_NO_PAD.encode(
+        format!(
+            "i:{}:{}:{}:{}:{}",
+            playlist_id,
+            role.as_str(),
+            name,
+            sender_name,
+            sender_ticket,
+        )
+        .as_bytes(),
+    )
 }
 
-/// Parse an invite code. Returns (playlist_id, role, name).
-pub fn parse_invite(code: &str) -> Option<(String, Role, String)> {
+/// Parsed invite code data.
+pub struct InviteInfo {
+    pub playlist_id: String,
+    pub role: Role,
+    pub name: String,
+    /// Sender's display name (None for legacy codes without sender info).
+    pub sender_name: Option<String>,
+    /// Sender's Iroh ticket (None for legacy codes without sender info).
+    pub sender_ticket: Option<String>,
+}
+
+/// Parse an invite code. Backward compatible with old format (no sender info).
+pub fn parse_invite(code: &str) -> Option<InviteInfo> {
     let bytes = URL_SAFE_NO_PAD.decode(code).ok()?;
     let raw = String::from_utf8(bytes).ok()?;
     let rest = raw.strip_prefix("i:")?;
-    // Split: playlist_id:role:name (name may contain colons)
+    // Split: playlist_id:role:remaining
     let (playlist_id, remainder) = rest.split_once(':')?;
-    let (role_str, name) = remainder.split_once(':')?;
+    let (role_str, after_role) = remainder.split_once(':')?;
     let role = Role::from_str(role_str)?;
-    Some((playlist_id.to_string(), role, name.to_string()))
+
+    // Try to split remaining into name:sender_name:sender_ticket
+    // The sender_ticket contains colons (it's a named ticket like "Name:base64"),
+    // so we split from the right: the last segment is sender_ticket, second-to-last
+    // is sender_name, everything before is the playlist name.
+    // But sender_ticket itself may contain ":", so we use a different approach:
+    // Count fields. The sender_ticket is base64url (no colons), but the named
+    // ticket format is "name:base64" which has exactly one colon.
+    // Strategy: try splitting into 3+ parts. If we have at least 3 parts after role,
+    // the last two are sender_name and sender_ticket.
+    let parts: Vec<&str> = after_role.splitn(4, ':').collect();
+    match parts.len() {
+        1 => {
+            // Legacy format: just name
+            Some(InviteInfo {
+                playlist_id: playlist_id.to_string(),
+                role,
+                name: parts[0].to_string(),
+                sender_name: None,
+                sender_ticket: None,
+            })
+        }
+        3.. => {
+            // New format: name:sender_name:sender_ticket (ticket may contain colons)
+            let name = parts[0].to_string();
+            let sender_name = parts[1].to_string();
+            // Rejoin remaining parts as the sender ticket (it may have colons in named format)
+            let ticket_start = after_role
+                .find(':')
+                .and_then(|p1| after_role[p1 + 1..].find(':').map(|p2| p1 + 1 + p2 + 1))
+                .unwrap_or(after_role.len());
+            let sender_ticket = after_role[ticket_start..].to_string();
+            Some(InviteInfo {
+                playlist_id: playlist_id.to_string(),
+                role,
+                name,
+                sender_name: Some(sender_name),
+                sender_ticket: if sender_ticket.is_empty() { None } else { Some(sender_ticket) },
+            })
+        }
+        _ => {
+            // 2 parts: ambiguous, treat as legacy
+            Some(InviteInfo {
+                playlist_id: playlist_id.to_string(),
+                role,
+                name: after_role.to_string(),
+                sender_name: None,
+                sender_ticket: None,
+            })
+        }
+    }
+}
+
+/// Generate a friend code for connecting without a playlist context.
+/// Format: base64("f:{display_name}:{ticket}")
+pub fn generate_friend_code(display_name: &str, ticket: &str) -> String {
+    URL_SAFE_NO_PAD.encode(format!("f:{}:{}", display_name, ticket).as_bytes())
+}
+
+/// Parse a friend code. Returns (display_name, ticket).
+pub fn parse_friend_code(code: &str) -> Option<(String, String)> {
+    let bytes = URL_SAFE_NO_PAD.decode(code).ok()?;
+    let raw = String::from_utf8(bytes).ok()?;
+    let rest = raw.strip_prefix("f:")?;
+    let (name, ticket) = rest.split_once(':')?;
+    if ticket.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), ticket.to_string()))
 }
 
 /// Add a member to a collaborative playlist.

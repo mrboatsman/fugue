@@ -80,14 +80,18 @@ pub async fn start(
 
     let (sender, receiver) = topic_handle.split();
 
+    let (event_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+
     let handle = SocialHandle {
         sender: Arc::new(tokio::sync::Mutex::new(sender)),
         display_name: display_name.clone(),
+        event_tx: event_tx.clone(),
     };
 
     // Spawn gossip receiver
     let db_clone = db.clone();
     let handle_sender = handle.sender.clone();
+    let event_tx_clone = event_tx.clone();
     tokio::spawn(async move {
         let mut receiver: GossipReceiver = receiver;
         loop {
@@ -95,12 +99,39 @@ pub async fn start(
                 Some(Ok(Event::Received(msg))) => {
                     if let Some(gossip_msg) = GossipMessage::from_bytes(&msg.content) {
                         let node_id = msg.delivered_from.to_string();
+                        // Push activity events to connected Moosic clients
+                        match &gossip_msg {
+                            GossipMessage::NowPlaying { display_name, track } => {
+                                let event = serde_json::json!({
+                                    "type": "now_playing",
+                                    "name": display_name,
+                                    "node_id": node_id,
+                                    "title": track.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                                    "artist": track.get("artist").and_then(|a| a.as_str()).unwrap_or(""),
+                                });
+                                let _ = event_tx_clone.send(event.to_string());
+                            }
+                            GossipMessage::StoppedPlaying { display_name } => {
+                                let event = serde_json::json!({
+                                    "type": "stopped_playing",
+                                    "name": display_name,
+                                    "node_id": node_id,
+                                });
+                                let _ = event_tx_clone.send(event.to_string());
+                            }
+                            _ => {}
+                        }
                         handle_gossip_message(&db_clone, &node_id, gossip_msg).await;
                     }
                 }
                 Some(Ok(Event::NeighborUp(peer))) => {
                     info!("social: peer connected: {}", peer);
                     let _ = friends::update_last_seen(&db_clone, &peer.to_string()).await;
+                    let event = serde_json::json!({
+                        "type": "friend_online",
+                        "node_id": peer.to_string(),
+                    });
+                    let _ = event_tx_clone.send(event.to_string());
 
                     // When a peer connects, sync all collab playlists
                     let playlists: Vec<(String, String)> = sqlx::query_as(
@@ -142,6 +173,11 @@ pub async fn start(
                 }
                 Some(Ok(Event::NeighborDown(peer))) => {
                     debug!("social: peer disconnected: {}", peer);
+                    let event = serde_json::json!({
+                        "type": "friend_offline",
+                        "node_id": peer.to_string(),
+                    });
+                    let _ = event_tx_clone.send(event.to_string());
                 }
                 Some(Ok(Event::Lagged)) => {
                     warn!("social: gossip receiver lagged, some messages missed");
@@ -164,6 +200,7 @@ pub async fn start(
     let endpoint_clone = endpoint.clone();
     let gossip_clone = gossip.clone();
     let router_clone = subsonic_router;
+    let event_tx_for_conn = event_tx;
     tokio::spawn(async move {
         loop {
             match endpoint_clone.accept().await {
@@ -172,6 +209,7 @@ pub async fn start(
                     let gossip = gossip_clone.clone();
                     let backends = backends_arc.clone();
                     let router = router_clone.clone();
+                    let evt_tx = event_tx_for_conn.clone();
                     tokio::spawn(async move {
                         match incoming.await {
                             Ok(conn) => {
@@ -194,8 +232,10 @@ pub async fn start(
                                             match conn.accept_bi().await {
                                                 Ok((send, recv)) => {
                                                     let r = router.clone();
+                                                    let etx = evt_tx.clone();
                                                     tokio::spawn(async move {
-                                                        if let Err(e) = crate::social::subsonic_bridge::handle_stream(send, recv, r).await {
+                                                        // Peek at the request to check for event subscription
+                                                        if let Err(e) = crate::social::subsonic_bridge::handle_stream_or_events(send, recv, r, etx).await {
                                                             debug!("subsonic-over-iroh stream error: {e}");
                                                         }
                                                     });
@@ -239,6 +279,11 @@ pub async fn start(
 }
 
 /// Re-read friends from DB and register any new addresses with the endpoint.
+/// Public alias for use from admin endpoints.
+pub async fn refresh_friend_addresses_now(db: &SqlitePool, endpoint: &Endpoint) {
+    refresh_friend_addresses(db, endpoint).await;
+}
+
 async fn refresh_friend_addresses(db: &SqlitePool, endpoint: &Endpoint) {
     let friend_list = friends::list_friends(db).await.unwrap_or_default();
     let memory_lookup = iroh::address_lookup::MemoryLookup::default();
@@ -507,6 +552,8 @@ async fn stream_from_backend_for_peer(
 pub struct SocialHandle {
     sender: Arc<tokio::sync::Mutex<GossipSender>>,
     display_name: String,
+    /// Broadcast channel for pushing live events to connected Moosic clients.
+    event_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl SocialHandle {
@@ -554,5 +601,11 @@ impl SocialHandle {
         if let Err(e) = sender.broadcast(msg.to_bytes()).await {
             debug!("social: broadcast playlist op failed: {}", e);
         }
+    }
+
+    /// Subscribe to live events (now playing, friend online/offline).
+    /// Returns a receiver that yields newline-delimited JSON strings.
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.event_tx.subscribe()
     }
 }
