@@ -142,6 +142,21 @@ pub fn router() -> Router<AppState> {
     let r = r.route("/admin/friend-add", any(system::admin_friend_add));
     let r = r.route("/admin/friends", any(system::admin_friends));
     let r = r.route("/admin/activity", any(system::admin_activity));
+    // Party mode
+    let r = r.route("/admin/party-create", any(system::admin_party_create));
+    let r = r.route("/admin/party-join", any(system::admin_party_join));
+    let r = r.route("/admin/party-leave", any(system::admin_party_leave));
+    let r = r.route("/admin/party-sync", any(system::admin_party_sync));
+    let r = r.route("/admin/party-queue-sync", any(system::admin_party_queue_sync));
+    let r = r.route("/admin/party-discover", any(system::admin_party_discover));
+    let r = r.route("/admin/party-beacon", any(system::admin_party_beacon));
+    let r = r.route("/admin/party-end", any(system::admin_party_end));
+    let r = r.route("/admin/party-status", any(system::admin_party_status));
+    let r = r.route("/admin/party-full-state", any(system::admin_party_full_state));
+    let r = r.route("/admin/party-time-ping", any(system::admin_party_time_ping));
+    let r = r.route("/admin/party-advertise-direct", any(system::admin_party_advertise_direct));
+    let r = r.route("/admin/party-peer-addr", any(system::admin_party_peer_addr));
+    let r = r.route("/admin/party-resolve-track", any(system::admin_party_resolve_track));
     // Catch-all for unknown /rest/ endpoints — log and return proper Subsonic error
     let r = r.fallback(fallback_handler);
     r.layer(middleware::from_fn(params::merge_post_form_params))
