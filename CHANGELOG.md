@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/mrboatsman/fugue/compare/v0.1.4...v0.1.5) - 2026-04-09
+
+### Added
+
+- Party mode with direct DJ↔follower P2P link and HTTP→Iroh auto-upgrade
+- Add /admin/playlist-join endpoint and admin path support in Iroh bridge
+- Add Subsonic-over-Iroh QUIC transport
+
+### Fixed
+
+- Clean up stale albums from cache and use incremental sync on startup
+
 ## [0.1.4](https://github.com/mrboatsman/fugue/compare/v0.1.3...v0.1.4) - 2026-03-18
 
 ### Added
