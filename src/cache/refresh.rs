@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -19,7 +20,7 @@ pub fn spawn_refresh_task(
         // Initial sync after a short delay to let the server start
         tokio::time::sleep(Duration::from_secs(5)).await;
         info!("cache refresh: initial sync starting");
-        refresh_all(&db, &backends, false).await;
+        refresh_all(&db, &backends, true).await;
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await; // skip the first immediate tick
@@ -200,7 +201,7 @@ async fn incremental_sync(
     info!("cache refresh: incremental sync for backend {}", backend.name);
 
     // 1. Refresh artist index (lightweight — just metadata)
-    sync_artists(db, backend).await?;
+    let (_artist_count, _artist_ids) = sync_artists(db, backend).await?;
 
     // 2. Fetch newest albums and check which ones are new to our cache
     let mut new_album_count = 0;
@@ -317,12 +318,13 @@ async fn full_sync(
     info!("cache refresh: full sync for backend {} ({})", backend.name, backend.base_url);
 
     // 1. Sync artists
-    let artist_count = sync_artists(db, backend).await?;
+    let (artist_count, fresh_artist_ids) = sync_artists(db, backend).await?;
 
     // 2. Crawl albums via getAlbumList2 in batches
     let mut album_offset = 0;
     let batch_size: usize = 500;
     let mut total_albums = 0;
+    let mut fresh_album_ids = HashSet::new();
 
     loop {
         let offset_str = album_offset.to_string();
@@ -351,6 +353,8 @@ async fn full_sync(
 
         let batch_count = albums.len();
         for album in &albums {
+            let original_id = album.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            fresh_album_ids.insert(encode_id(backend.index, original_id));
             cache_album(db, backend, album).await;
             total_albums += 1;
         }
@@ -366,7 +370,27 @@ async fn full_sync(
         album_offset += batch_size;
     }
 
-    // 3. Crawl tracks per album
+    // 2b. Remove stale albums (and their tracks) no longer on the backend
+    match db::delete_stale_albums(db, backend.index, &fresh_album_ids).await {
+        Ok(0) => {}
+        Ok(n) => info!(
+            "cache refresh: backend {} - removed {} stale albums",
+            backend.name, n
+        ),
+        Err(e) => warn!("cache refresh: failed to clean stale albums: {}", e),
+    }
+
+    // 2c. Remove stale artists no longer on the backend
+    match db::delete_stale_artists(db, backend.index, &fresh_artist_ids).await {
+        Ok(0) => {}
+        Ok(n) => info!(
+            "cache refresh: backend {} - removed {} stale artists",
+            backend.name, n
+        ),
+        Err(e) => warn!("cache refresh: failed to clean stale artists: {}", e),
+    }
+
+    // 3. Crawl tracks per album (only fresh albums)
     let mut total_tracks = 0;
     let album_ids: Vec<(String, String)> = sqlx::query_as(
         "SELECT id, original_id FROM albums WHERE backend_idx = ?",
@@ -394,9 +418,12 @@ async fn full_sync(
             }
             Err(e) => {
                 warn!(
-                    "cache refresh: failed to get album {} from {}: {}",
+                    "cache refresh: failed to get album {} from {}: {}, removing from cache",
                     original_album_id, backend.name, e
                 );
+                if let Err(del_err) = db::delete_album(db, namespaced_album_id).await {
+                    warn!("cache refresh: failed to delete stale album: {}", del_err);
+                }
             }
         }
     }
@@ -427,13 +454,14 @@ async fn full_sync(
     Ok(true)
 }
 
-/// Sync the artist index for a backend.
+/// Sync the artist index for a backend. Returns (count, set of namespaced IDs).
 async fn sync_artists(
     db: &SqlitePool,
     backend: &BackendClient,
-) -> Result<usize, Box<dyn std::error::Error>> {
+) -> Result<(usize, HashSet<String>), Box<dyn std::error::Error>> {
     let artists_resp = backend.request_json("getArtists", &[]).await?;
     let mut count = 0;
+    let mut seen_ids = HashSet::new();
 
     if let Some(indexes) = artists_resp
         .get("artists")
@@ -463,6 +491,7 @@ async fn sync_artists(
                     .await
                     .map_err(|e| format!("upsert artist: {e}"))?;
 
+                    seen_ids.insert(namespaced_id);
                     count += 1;
                 }
             }
@@ -470,7 +499,7 @@ async fn sync_artists(
     }
 
     debug!("cache refresh: backend {} - {} artists synced", backend.name, count);
-    Ok(count)
+    Ok((count, seen_ids))
 }
 
 /// Get the stored lastModified timestamp for a backend's index.

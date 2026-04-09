@@ -341,6 +341,66 @@ pub async fn clear_backend(db: &SqlitePool, backend_idx: usize) -> Result<(), Fu
     Ok(())
 }
 
+/// Remove a single album and its tracks from the cache.
+pub async fn delete_album(db: &SqlitePool, namespaced_id: &str) -> Result<(), FugueError> {
+    sqlx::query("DELETE FROM tracks WHERE album_id = ?")
+        .bind(namespaced_id)
+        .execute(db)
+        .await?;
+    sqlx::query("DELETE FROM albums WHERE id = ?")
+        .bind(namespaced_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Remove stale albums (and their tracks) for a backend that are not in the given set of IDs.
+pub async fn delete_stale_albums(
+    db: &SqlitePool,
+    backend_idx: usize,
+    fresh_ids: &std::collections::HashSet<String>,
+) -> Result<usize, FugueError> {
+    let all_ids: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM albums WHERE backend_idx = ?")
+            .bind(backend_idx as i64)
+            .fetch_all(db)
+            .await?;
+
+    let mut removed = 0;
+    for (id,) in &all_ids {
+        if !fresh_ids.contains(id) {
+            delete_album(db, id).await?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Remove stale artists for a backend that are not in the given set of IDs.
+pub async fn delete_stale_artists(
+    db: &SqlitePool,
+    backend_idx: usize,
+    fresh_ids: &std::collections::HashSet<String>,
+) -> Result<usize, FugueError> {
+    let all_ids: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM artists WHERE backend_idx = ?")
+            .bind(backend_idx as i64)
+            .fetch_all(db)
+            .await?;
+
+    let mut removed = 0;
+    for (id,) in &all_ids {
+        if !fresh_ids.contains(id) {
+            sqlx::query("DELETE FROM artists WHERE id = ?")
+                .bind(id)
+                .execute(db)
+                .await?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// Get deduplicated albums. For albums that exist in dedup_groups, only return
 /// the best member (highest score). Non-duplicate albums pass through unchanged.
 pub async fn get_all_albums_deduped(
