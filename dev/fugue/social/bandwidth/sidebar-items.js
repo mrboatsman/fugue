@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_BITRATE","STALE_THRESHOLD"],"fn":["select_quality"],"struct":["BandwidthTracker","PeerBandwidth"]};

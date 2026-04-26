@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ID_FIELDS"],"fn":["merge_album_lists","merge_artist_indexes","merge_playlists","merge_random_songs","merge_search_results","merge_starred"],"trait":["NamespaceIds"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_starred_response","get_starred","get_starred2","resolve_items","scrobble","set_rating","star","unstar"]};

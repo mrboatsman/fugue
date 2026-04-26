@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["any_cache_fresh","build_artist_index","get_album","get_artist","get_artists","get_genres","get_indexes","get_music_folders","get_song"]};

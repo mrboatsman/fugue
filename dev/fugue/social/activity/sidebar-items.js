@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_chat_message","clear_now_playing","get_chat_messages","get_now_playing","set_now_playing"]};

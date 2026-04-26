@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_starred_ids","is_starred","star","unstar"]};

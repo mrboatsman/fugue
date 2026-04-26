@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_friend","get_friend_by_key","list_friends","remove_friend","update_last_seen"],"struct":["Friend"]};

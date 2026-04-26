@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ApiKeyAction","Commands","FriendAction","PlaylistAction"],"fn":["api_key","build_backends","check","friend","init_db","main","playlist","serve","status","sync","ticket"],"mod":["cache","config","dedup","error","health","id","proxy","social","state","subsonic"],"struct":["Cli"]};

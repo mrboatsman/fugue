@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_tracks_to_playlist","create_playlist","decode_local_playlist_id","delete_playlist","encode_local_playlist_id","get_playlist","get_playlists_for_user","is_local_playlist_id","remove_tracks_from_playlist","to_iso8601","update_playlist","uuid_v4"]};

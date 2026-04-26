@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fallback_handler","router"],"macro":["subsonic_route"],"mod":["annotation","auth","browsing","extras","favorites_db","lists","media","models","params","playlist_db","playlists","response","search","system"]};

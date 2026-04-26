@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>fugue docs</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; }
+  a { display: block; padding: 0.5rem 0; }
+</style>
+</head>
+<body>
+<h1>fugue documentation</h1>
+<div id="versions"></div>
+<script>
+const versions = [
+  'dev',
+];
+const container = document.getElementById('versions');
+const order = ['latest', 'dev'];
+versions.sort((a, b) => {
+  const ai = order.indexOf(a), bi = order.indexOf(b);
+  if (ai !== -1 && bi !== -1) return ai - bi;
+  if (ai !== -1) return -1;
+  if (bi !== -1) return -1;
+  return b.localeCompare(a, undefined, { numeric: true });
+});
+versions.forEach(v => {
+  const a = document.createElement('a');
+  a.href = v + '/fugue/index.html';
+  a.textContent = v;
+  container.appendChild(a);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["broadcast_playlist_sync","collect_song_ids","create_playlist","delete_playlist","get_playlist","get_playlists","resolve_track_for_collab","update_playlist"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cache_stats","clear_backend","delete_album","delete_stale_albums","delete_stale_artists","find_artist_ids_by_name","get_albums_by_artist","get_all_albums","get_all_albums_deduped","get_all_artists","get_all_artists_deduped","get_cache_meta","is_cache_fresh","search_cached","set_cache_meta","upsert_album","upsert_artist","upsert_track"]};

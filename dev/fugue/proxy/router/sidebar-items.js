@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["route_to_backend"]};

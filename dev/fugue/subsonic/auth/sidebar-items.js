@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_api_key","list_api_keys","revoke_api_key","validate_auth","verify_api_key","verify_token"],"struct":["AuthQuery","AuthenticatedUser"]};
